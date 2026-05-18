@@ -101,6 +101,7 @@
           onerror="console.error('[DIAG] X — Babel UMD FAILED to load from unpkg'); window.__mc_diag.babelFailed = true;"></script>
 
   <script type="text/babel" data-type="module" data-presets="react">
+console.log('[DIAG] 3 — Babel started executing JSX');
 console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -1426,6 +1427,70 @@ function calculatePurchaseFrequency(articleId, purchases) {
 }
 
 /**
+ * Computes an alert threshold based purely on purchase history, without
+ * needing sales data. Useful when ventes CLYO are not yet imported.
+ *
+ * Logic:
+ *  1. Collect all purchase events for this article (date + qty)
+ *  2. Calculate average qty per purchase and average interval between purchases
+ *  3. Estimate daily consumption = avgQty / avgIntervalDays
+ *  4. Threshold = dailyConsumption × avgIntervalDays × safetyFactor (1.2)
+ *     → "alert me when I have less than 1.2 purchase-cycles worth of stock"
+ *  5. Also compute daysUntilNextPurchase based on last purchase date + avgInterval
+ *
+ * Requires at least 2 purchase events to compute meaningful stats.
+ * Returns null if not enough data.
+ */
+function calculatePurchaseBasedThreshold(articleId, purchases) {
+  const events = []; // { date, qty }
+  for (const p of purchases) {
+    let qty = 0;
+    for (const item of (p.items || [])) {
+      if (item.articleId === articleId && item.convertedQty > 0) {
+        qty += item.convertedQty;
+      }
+    }
+    if (qty > 0 && p.date) events.push({ date: p.date, qty });
+  }
+  if (events.length < 2) return null;
+  events.sort((a, b) => a.date.localeCompare(b.date));
+
+  // Average quantity per purchase
+  const totalQty = events.reduce((s, e) => s + e.qty, 0);
+  const avgQtyPerPurchase = totalQty / events.length;
+
+  // Average interval between purchases (in days)
+  let totalGap = 0;
+  for (let i = 1; i < events.length; i++) {
+    totalGap += daysBetween(events[i - 1].date, events[i].date);
+  }
+  const avgIntervalDays = totalGap / (events.length - 1);
+  if (avgIntervalDays <= 0) return null;
+
+  // Estimated daily consumption
+  const perDay = avgQtyPerPurchase / avgIntervalDays;
+
+  // Threshold = enough stock for 1 full purchase cycle + 20% safety buffer
+  const safetyFactor = 1.2;
+  const threshold = avgQtyPerPurchase * safetyFactor;
+
+  const lastDate = events[events.length - 1].date;
+  const daysSinceLastPurchase = daysBetween(lastDate, new Date().toISOString().slice(0, 10));
+  const daysUntilNextPurchase = Math.max(0, avgIntervalDays - daysSinceLastPurchase);
+
+  return {
+    threshold,
+    perDay,
+    avgIntervalDays,
+    avgQtyPerPurchase,
+    lastPurchaseDate: lastDate,
+    daysUntilNextPurchase,
+    purchaseCount: events.length,
+    source: 'purchase_history',
+  };
+}
+
+/**
  * Computes the automatic stock threshold for an article.
  *   threshold = consumption_per_day × (lead_time + safety_margin)
  *
@@ -1672,28 +1737,52 @@ function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, i
           ? Math.max(consumptionRate.perDay * 10, Math.abs(summary.value))
           : null,
       });
-    } else if (summary && summary.value != null && hasEnoughData) {
+    } else if (summary && summary.value != null) {
       const purchaseFreq = calculatePurchaseFrequency(article.id, purchases);
       const manualThreshold = article.manualThreshold;
-      const auto = calculateAutoThreshold(consumptionRate, purchaseFreq);
-      const threshold = manualThreshold != null ? manualThreshold : (auto?.threshold ?? null);
+
+      let threshold = null;
+      let thresholdSource = 'manual';
+      let perDay = 0;
+      let daysOfCover = null;
+      let recommendation = null;
+      let leadTime = null;
+
+      if (manualThreshold != null) {
+        // 1. Manual threshold — always wins
+        threshold = manualThreshold;
+        thresholdSource = 'manual';
+      } else if (hasEnoughData) {
+        // 2. Auto threshold from sales consumption
+        const auto = calculateAutoThreshold(consumptionRate, purchaseFreq);
+        threshold = auto?.threshold ?? null;
+        thresholdSource = 'auto';
+        perDay = consumptionRate.perDay;
+        leadTime = auto?.leadTime;
+      } else {
+        // 3. Fallback: purchase-history based threshold (no sales needed)
+        const purchaseBased = calculatePurchaseBasedThreshold(article.id, purchases);
+        if (purchaseBased) {
+          threshold = purchaseBased.threshold;
+          thresholdSource = 'purchase_history';
+          perDay = purchaseBased.perDay;
+        }
+      }
 
       if (threshold != null && summary.value < threshold) {
-        const daysOfCover = consumptionRate.perDay > 0 ? summary.value / consumptionRate.perDay : null;
-        const recommendation = consumptionRate.perDay > 0
-          ? consumptionRate.perDay * (auto?.leadTime || 7) * 2  // 2× lead time = next safe order qty
-          : null;
+        daysOfCover = perDay > 0 ? summary.value / perDay : null;
+        recommendation = perDay > 0 ? perDay * (leadTime || 30) * 2 : null;
         alerts.push({
           article,
           type: ALERT_TYPES.STOCK_LOW,
           sortKey: daysOfCover ?? 999,
           currentStock: summary.value,
           isEstimate: summary.isEstimate,
-          consumptionPerDay: consumptionRate.perDay,
+          consumptionPerDay: perDay,
           daysOfCover,
           threshold,
-          thresholdSource: manualThreshold != null ? 'manual' : 'auto',
-          leadTime: auto?.leadTime,
+          thresholdSource,
+          leadTime,
           recommendation,
         });
       }
@@ -2711,7 +2800,7 @@ function useIsMobile(threshold = 600) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function usePeriodFilter() {
-  const [period, setPeriod] = useState('90j');
+  const [period, setPeriod] = useState('365j');
 
   // Custom range state — used only when period === 'custom'
   // Initialized to "today minus 30 days" → today, so the user has a sensible default
@@ -5288,18 +5377,25 @@ function ArticlesView({ context }) {
   });
 
   const handleSave = (data) => {
-    if (data.id) {
-      setArticles(articles.map((i) => (i.id === data.id ? data : i)));
+    // Normalize manualThreshold: empty string → null (so auto-threshold kicks in)
+    const normalized = {
+      ...data,
+      manualThreshold: data.manualThreshold !== '' && data.manualThreshold != null
+        ? Number(data.manualThreshold)
+        : null,
+    };
+    if (normalized.id) {
+      setArticles(articles.map((i) => (i.id === normalized.id ? normalized : i)));
     } else {
       setArticles([
         ...articles,
         {
-          ...data,
+          ...normalized,
           id: generateId('i'),
-          type: data.type || 'food',
-          variants: data.variants && data.variants.length > 0
-            ? data.variants
-            : [{ id: generateId('v'), name: data.name, aliases: [], packagings: [] }],
+          type: normalized.type || 'food',
+          variants: normalized.variants && normalized.variants.length > 0
+            ? normalized.variants
+            : [{ id: generateId('v'), name: normalized.name, aliases: [], packagings: [] }],
         },
       ]);
     }
@@ -5584,7 +5680,8 @@ function ArticleModal({ initial, onSave, onClose }) {
       : [{ id: generateId('v'), name: initial.name || 'Standard', aliases: [], packagings: [] }],
     type: initial.type || 'food',
     stockType: initial.stockType || DEFAULT_STOCK_TYPE,
-    trackStock: initial.trackStock !== false, // default true (only false if explicitly set)
+    trackStock: initial.trackStock !== false,
+    manualThreshold: initial.manualThreshold ?? '',
     id: initial.id,
   });
 
@@ -5764,6 +5861,24 @@ function ArticleModal({ initial, onSave, onClose }) {
                 {form.trackStock
                   ? 'Apparaît dans l\'onglet Stocks et sera inclus dans les inventaires.'
                   : 'L\'article reste utilisable dans les recettes mais n\'est pas suivi en stock.'}
+              </div>
+            </div>
+
+            {/* Manual threshold */}
+            <div>
+              <label className="mc-label">Seuil d'alerte ({form.unit || 'unité'})</label>
+              <input
+                type="number"
+                className="mc-input"
+                step="0.01"
+                min="0"
+                value={form.manualThreshold}
+                onChange={(e) => setForm({ ...form, manualThreshold: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+                placeholder="Ex: 5"
+              />
+              <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 6, lineHeight: 1.5 }}>
+                Alerte dans l'onglet Alertes quand le stock passe sous ce seuil.
+                Laisser vide = calcul automatique basé sur la consommation.
               </div>
             </div>
           </div>
@@ -12231,8 +12346,8 @@ function AlertsView({ context }) {
         </div>
       )}
 
-      {/* Phase-1 explanatory banner: stock-low alerts depend on sales data, so
-          they can't fire yet. Price alerts work fine without sales. */}
+      {/* Phase-1 explanatory banner: auto-threshold alerts need sales data.
+          Manual thresholds work fine without sales. */}
       {phase1Mode && (
         <div style={{
           padding: 14,
@@ -12246,10 +12361,10 @@ function AlertsView({ context }) {
         }}>
           <AlertCircle size={16} style={{ color: palette.amber, flexShrink: 0, marginTop: 2 }} />
           <div style={{ fontSize: 13, color: palette.ink, lineHeight: 1.5 }}>
-            <strong>Alertes de stock bas en attente.</strong>
-            {' '}Elles s'activeront automatiquement dès que vous aurez importé
-            vos ventes CLYO (nécessaire pour estimer la consommation moyenne).
-            En attendant, les <strong>alertes de prix</strong> fonctionnent normalement.
+            <strong>Seuils automatiques en attente.</strong>
+            {' '}Les seuils calculés automatiquement nécessitent vos ventes CLYO.
+            En attendant, les alertes avec un <strong>seuil manuel</strong> (défini dans le catalogue)
+            et les <strong>alertes de prix</strong> fonctionnent normalement.
           </div>
         </div>
       )}
@@ -12408,7 +12523,11 @@ function StockAlertRow({ alert, onEditThreshold }) {
         )}
         {threshold != null && (
           <div style={{ fontSize: 10, color: palette.inkSoft, marginTop: 2 }}>
-            Seuil : {threshold.toFixed(2)} {article.unit} ({thresholdSource === 'manual' ? 'manuel' : 'auto'})
+            Seuil : {threshold.toFixed(2)} {article.unit} ({
+              thresholdSource === 'manual' ? 'manuel' :
+              thresholdSource === 'purchase_history' ? 'basé sur achats' :
+              'auto'
+            })
           </div>
         )}
       </div>
@@ -15390,6 +15509,7 @@ if (!_mc_rootEl) {
     console.error('[BOOT] mount CRASHED:', err);
   }
 }
+
 
 
   </script>
