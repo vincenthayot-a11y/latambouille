@@ -101,7 +101,7 @@
           onerror="console.error('[DIAG] X — Babel UMD FAILED to load from unpkg'); window.__mc_diag.babelFailed = true;"></script>
 
   <script type="text/babel" data-type="module" data-presets="react">
-console.log('[DIAG] 3 — Babel started executing JSX');
+console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -1162,6 +1162,65 @@ function daysBetween(dateA, dateB) {
  *
  * Or null if no completed inventory exists for this article.
  */
+/**
+ * Estimates current stock purely from purchase history, without any inventory.
+ *
+ * Algorithm:
+ *  1. Sum all purchases of this article → total bought
+ *  2. Estimate daily consumption from purchase frequency
+ *     (avgQty / avgInterval = qty used per day between orders)
+ *  3. Stock estimate = total bought - (consumption/day × days since first purchase)
+ *
+ * This is inherently imprecise (we don't know the starting stock), so we
+ * assume stock was 0 before the first purchase (conservative / safe).
+ *
+ * Returns { value, perDay, firstPurchaseDate, lastPurchaseDate, daysElapsed }
+ * or null if fewer than 2 purchases (can't compute consumption rate).
+ */
+function computeEstimatedStockFromPurchases(articleId, purchases, today) {
+  const events = [];
+  for (const p of purchases) {
+    let qty = 0;
+    for (const item of (p.items || [])) {
+      if (item.articleId === articleId && item.convertedQty > 0) qty += item.convertedQty;
+    }
+    if (qty > 0 && p.date) events.push({ date: p.date, qty });
+  }
+  if (events.length < 2) return null;
+  events.sort((a, b) => a.date.localeCompare(b.date));
+
+  // Average daily consumption from purchase intervals
+  let totalGap = 0;
+  for (let i = 1; i < events.length; i++) {
+    totalGap += daysBetween(events[i - 1].date, events[i].date);
+  }
+  const avgInterval = totalGap / (events.length - 1);
+  const avgQty = events.reduce((s, e) => s + e.qty, 0) / events.length;
+  const perDay = avgInterval > 0 ? avgQty / avgInterval : 0;
+
+  // Total purchased
+  const totalBought = events.reduce((s, e) => s + e.qty, 0);
+
+  // Days elapsed since first purchase
+  const firstDate = events[0].date;
+  const lastDate = events[events.length - 1].date;
+  const daysElapsed = daysBetween(firstDate, today);
+
+  // Estimated stock = total bought - estimated consumption
+  const estimated = totalBought - (perDay * daysElapsed);
+
+  return {
+    value: estimated,
+    perDay,
+    firstPurchaseDate: firstDate,
+    lastPurchaseDate: lastDate,
+    daysElapsed,
+    isEstimate: true,
+    isNegative: estimated < 0,
+    purchaseCount: events.length,
+  };
+}
+
 function computeStockSummary(article, outflowIndex, purchases, inventories, sales, today) {
   const articleId = article.id;
   const latestInv = findLatestInventoryEntry(articleId, inventories);
@@ -1726,6 +1785,41 @@ function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, i
     const hasEnoughData = consumptionRate.mode !== 'insufficient';
 
     // ─── Stock empty / low ───────────────────────────────────────────────
+
+    // Always compute purchase-based estimate (no inventory needed)
+    const estimatedStock = computeEstimatedStockFromPurchases(article.id, purchases, today);
+
+    if (estimatedStock) {
+      // Purchase-based estimate: compute threshold
+      const purchaseFreqData = {
+        avgIntervalDays: estimatedStock.daysElapsed / estimatedStock.purchaseCount,
+        perDay: estimatedStock.perDay,
+      };
+      const manualThreshold = article.manualThreshold;
+      const autoThreshold = estimatedStock.perDay > 0
+        ? estimatedStock.perDay * (purchaseFreqData.avgIntervalDays || 30) * 1.2
+        : null;
+      const threshold = manualThreshold != null ? manualThreshold : autoThreshold;
+
+      if (threshold != null && estimatedStock.value < threshold) {
+        const daysOfCover = estimatedStock.perDay > 0 ? Math.max(0, estimatedStock.value) / estimatedStock.perDay : null;
+        alerts.push({
+          article,
+          type: ALERT_TYPES.STOCK_LOW,
+          sortKey: estimatedStock.isNegative ? -900 : (daysOfCover ?? 50), // high priority
+          currentStock: estimatedStock.value,
+          isEstimate: true,
+          estimatedFromPurchases: true,
+          consumptionPerDay: estimatedStock.perDay,
+          daysOfCover,
+          threshold,
+          thresholdSource: manualThreshold != null ? 'manual' : 'purchase_history',
+          recommendation: estimatedStock.perDay > 0 ? estimatedStock.perDay * 30 : null,
+        });
+        continue; // skip inventory-based alert for this article — estimate is prioritary
+      }
+    }
+
     if (summary && summary.isNegative) {
       // Always alert on empty stock, regardless of data history (it's a fact)
       alerts.push({
@@ -12460,7 +12554,7 @@ function AlertsView({ context }) {
  * stock, days of cover and a clear recommendation.
  */
 function StockAlertRow({ alert, onEditThreshold }) {
-  const { article, type, currentStock, isEstimate, consumptionPerDay, daysOfCover, threshold, thresholdSource, recommendation } = alert;
+  const { article, type, currentStock, isEstimate, estimatedFromPurchases, consumptionPerDay, daysOfCover, threshold, thresholdSource, recommendation } = alert;
   const isEmpty = type === ALERT_TYPES.STOCK_EMPTY;
 
   return (
@@ -12483,19 +12577,28 @@ function StockAlertRow({ alert, onEditThreshold }) {
               Épuisé
             </span>
           )}
+          {estimatedFromPurchases && (
+            <span className="mc-pill" style={{ background: palette.amber + '20', color: palette.amber, fontWeight: 600, fontSize: 10 }}>
+              ≈ Estimé (achats)
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2, marginLeft: 16 }}>
           {article.category}
+          {estimatedFromPurchases && ' · Sans inventaire — stock calculé depuis l\'historique d\'achats'}
         </div>
       </div>
 
       <div>
-        <div style={{ fontSize: 11, color: palette.inkSoft }}>Stock actuel</div>
-        <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, color: isEmpty ? palette.wine : palette.ink }}>
+        <div style={{ fontSize: 11, color: palette.inkSoft }}>Stock {estimatedFromPurchases ? 'estimé' : 'actuel'}</div>
+        <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, color: isEmpty || currentStock < 0 ? palette.wine : palette.ink }}>
           {isEmpty
             ? <em style={{ fontSize: 12 }}>Épuisé</em>
-            : `${isEstimate ? '≈ ' : ''}${currentStock.toFixed(2)} ${article.unit}`}
+            : `≈ ${Math.max(0, currentStock).toFixed(2)} ${article.unit}`}
         </div>
+        {currentStock < 0 && !isEmpty && (
+          <div style={{ fontSize: 10, color: palette.wine, marginTop: 2 }}>Stock épuisé depuis {Math.abs(Math.round(currentStock / (consumptionPerDay || 1)))} j</div>
+        )}
       </div>
 
       <div>
