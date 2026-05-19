@@ -104,6 +104,7 @@
 console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
+console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -5835,7 +5836,18 @@ function ArticleModal({ initial, onSave, onClose }) {
           </div>
           <div style={{ gridColumn: '1 / -1' }}>
             <label className="mc-label">Catégorie</label>
-            <input className="mc-input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
+            <select
+              className="mc-input"
+              value={form.category || 'À trier'}
+              onChange={(e) => setForm({ ...form, category: e.target.value })}
+            >
+              {ARTICLE_CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+              {form.category && !ARTICLE_CATEGORIES.includes(form.category) && (
+                <option value={form.category}>{form.category}</option>
+              )}
+            </select>
           </div>
           <div style={{ gridColumn: '1 / -1' }}>
             <label className="mc-label">Type de produit</label>
@@ -12356,24 +12368,70 @@ function InventoryHistorySection({
 // on the next memo recalculation.
 
 function AlertsView({ context }) {
-  const { alertsIndex, articles, setArticles, sales, alertSettings, setAlertSettings } = context;
+  const { alertsIndex, articles, setArticles, sales, alertSettings, setAlertSettings, purchases } = context;
   const [editingThresholdId, setEditingThresholdId] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const phase1Mode = sales.length === 0;
 
-  // Group alerts by type for readability
-  const stockAlerts = useMemo(
-    () => alertsIndex.filter((a) => a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY),
-    [alertsIndex]
-  );
-  const priceAlerts = useMemo(
-    () => alertsIndex.filter((a) => a.type === ALERT_TYPES.PRICE_TREND),
-    [alertsIndex]
-  );
-  const supplierGapAlerts = useMemo(
-    () => alertsIndex.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP),
-    [alertsIndex]
-  );
+  // ─── Filters ────────────────────────────────────────────────────────────
+  const [filterType, setFilterType] = useState('all');
+  const [filterCategory, setFilterCategory] = useState('all');
+  const [filterSeverity, setFilterSeverity] = useState('all');
+  const [filterSupplier, setFilterSupplier] = useState('all');
+
+  const filterOptions = useMemo(() => {
+    const categories = new Set();
+    const suppliers = new Set();
+    for (const a of alertsIndex) {
+      if (a.article?.category) categories.add(a.article.category);
+      if (a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP) {
+        (a.suppliers || []).forEach((s) => suppliers.add(s.supplier));
+      }
+      if ((a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY) && a.article) {
+        for (const p of (purchases || [])) {
+          if (p.items?.some((it) => it.articleId === a.article.id) && p.supplier) suppliers.add(p.supplier);
+        }
+      }
+    }
+    return { categories: [...categories].sort(), suppliers: [...suppliers].sort() };
+  }, [alertsIndex, purchases]);
+
+  const getSeverity = (alert) => {
+    if (alert.type === ALERT_TYPES.STOCK_EMPTY) return 'critical';
+    if (alert.type === ALERT_TYPES.STOCK_LOW) {
+      if (alert.currentStock < 0 || (alert.daysOfCover != null && alert.daysOfCover < 3)) return 'critical';
+      return 'warning';
+    }
+    if (alert.type === ALERT_TYPES.SUPPLIER_PRICE_GAP) return alert.gapPct > 30 ? 'critical' : 'warning';
+    return 'warning';
+  };
+
+  const filteredAlerts = useMemo(() => {
+    return alertsIndex.filter((a) => {
+      if (filterType !== 'all') {
+        if (filterType === 'estimated' && !a.estimatedFromPurchases) return false;
+        if (filterType === 'stock' && ![ALERT_TYPES.STOCK_LOW, ALERT_TYPES.STOCK_EMPTY].includes(a.type)) return false;
+        if (filterType === 'price' && a.type !== ALERT_TYPES.PRICE_TREND) return false;
+        if (filterType === 'supplier' && a.type !== ALERT_TYPES.SUPPLIER_PRICE_GAP) return false;
+      }
+      if (filterCategory !== 'all' && a.article?.category !== filterCategory) return false;
+      if (filterSeverity !== 'all' && getSeverity(a) !== filterSeverity) return false;
+      if (filterSupplier !== 'all') {
+        if (a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP) {
+          if (!(a.suppliers || []).some((s) => s.supplier === filterSupplier)) return false;
+        } else {
+          const has = (purchases || []).some((p) => p.supplier === filterSupplier && p.items?.some((it) => it.articleId === a.article?.id));
+          if (!has) return false;
+        }
+      }
+      return true;
+    });
+  }, [alertsIndex, filterType, filterCategory, filterSeverity, filterSupplier, purchases]);
+
+  const activeFilters = [filterType, filterCategory, filterSeverity, filterSupplier].filter((f) => f !== 'all').length;
+  const stockAlerts = filteredAlerts.filter((a) => a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY);
+  const priceAlerts = filteredAlerts.filter((a) => a.type === ALERT_TYPES.PRICE_TREND);
+  const supplierGapAlerts = filteredAlerts.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP);
 
   const handleThresholdSave = (articleId, newThreshold) => {
     setArticles(articles.map((i) =>
@@ -12386,25 +12444,55 @@ function AlertsView({ context }) {
     setEditingThresholdId(null);
   };
 
+  const selectStyle = { padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 12, color: palette.ink, cursor: 'pointer' };
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 12 }}>
         <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>
           Alertes
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ fontSize: 12, color: palette.inkSoft }}>
-            {alertsIndex.length} alerte{alertsIndex.length > 1 ? 's' : ''} en cours
+            {filteredAlerts.length}/{alertsIndex.length} alerte{alertsIndex.length > 1 ? 's' : ''}
           </div>
-          <button
-            className="mc-btn mc-btn-ghost"
-            onClick={() => setShowSettings((s) => !s)}
-            style={{ padding: '6px 12px', fontSize: 12 }}
-            title="Configurer les seuils d'alerte"
-          >
+          <button className="mc-btn mc-btn-ghost" onClick={() => setShowSettings((s) => !s)} style={{ padding: '6px 12px', fontSize: 12 }}>
             ⚙ Paramètres
           </button>
         </div>
+      </div>
+
+      {/* Filtres */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20, alignItems: 'center' }}>
+        <select value={filterType} onChange={(e) => setFilterType(e.target.value)} style={selectStyle}>
+          <option value="all">Tous les types</option>
+          <option value="stock">Stock bas / épuisé</option>
+          <option value="estimated">Stock estimé (achats)</option>
+          <option value="price">Hausse de prix</option>
+          <option value="supplier">Écart fournisseur</option>
+        </select>
+        <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)} style={selectStyle}>
+          <option value="all">Toutes sévérités</option>
+          <option value="critical">🔴 Critique</option>
+          <option value="warning">🟡 Attention</option>
+        </select>
+        {filterOptions.categories.length > 0 && (
+          <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} style={selectStyle}>
+            <option value="all">Toutes catégories</option>
+            {filterOptions.categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
+        {filterOptions.suppliers.length > 0 && (
+          <select value={filterSupplier} onChange={(e) => setFilterSupplier(e.target.value)} style={selectStyle}>
+            <option value="all">Tous fournisseurs</option>
+            {filterOptions.suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
+        {activeFilters > 0 && (
+          <button className="mc-btn mc-btn-ghost" onClick={() => { setFilterType('all'); setFilterCategory('all'); setFilterSeverity('all'); setFilterSupplier('all'); }} style={{ fontSize: 12, color: palette.wine, padding: '6px 10px' }}>
+            ✕ Réinitialiser ({activeFilters})
+          </button>
+        )}
       </div>
 
       {/* ─── Settings panel (collapsible) ─────────────────────────────────── */}
@@ -15612,6 +15700,7 @@ if (!_mc_rootEl) {
     console.error('[BOOT] mount CRASHED:', err);
   }
 }
+
 
 
 
