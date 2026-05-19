@@ -1106,35 +1106,54 @@ function calculateConsumableRate(articleId, purchases, inventories) {
     .filter((inv) => (inv.entries || []).some((e) => e.articleId === articleId))
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  if (completed.length < 2) return null;
-
-  const last = completed[0];
-  const prev = completed[1];
-
-  const lastEntry = last.entries.find((e) => e.articleId === articleId);
-  const prevEntry = prev.entries.find((e) => e.articleId === articleId);
-  if (!lastEntry || !prevEntry) return null;
-
-  // Sum purchases STRICTLY between prev.date (exclusive) and last.date (inclusive)
-  let purchasedBetween = 0;
-  for (const p of purchases) {
-    if (p.date <= prev.date) continue;
-    if (p.date > last.date) continue;
-    for (const item of p.items) {
-      if (item.articleId === articleId && item.convertedQty > 0) {
-        purchasedBetween += item.convertedQty;
+  if (completed.length >= 2) {
+    // ── Best case: 2+ inventories → real consumption rate ────────────────
+    const last = completed[0];
+    const prev = completed[1];
+    const lastEntry = last.entries.find((e) => e.articleId === articleId);
+    const prevEntry = prev.entries.find((e) => e.articleId === articleId);
+    if (lastEntry && prevEntry) {
+      let purchasedBetween = 0;
+      for (const p of purchases) {
+        if (p.date <= prev.date || p.date > last.date) continue;
+        for (const item of p.items) {
+          if (item.articleId === articleId && item.convertedQty > 0) purchasedBetween += item.convertedQty;
+        }
       }
+      const consumed = prevEntry.quantity + purchasedBetween - lastEntry.quantity;
+      const periodDays = Math.max(1, daysBetween(prev.date, last.date));
+      return {
+        perDay: Math.max(0, consumed / periodDays),
+        periodDays,
+        isReliable: periodDays >= 14,
+        source: 'inventories',
+      };
     }
   }
 
-  const consumed = prevEntry.quantity + purchasedBetween - lastEntry.quantity;
-  const periodDays = Math.max(1, daysBetween(prev.date, last.date));
-  const perDay = consumed / periodDays;
+  // ── Fallback: 0 or 1 inventory → use purchase frequency as proxy ──────
+  // Collect all purchase events for this article
+  const events = [];
+  for (const p of purchases) {
+    let qty = 0;
+    for (const item of (p.items || [])) {
+      if (item.articleId === articleId && item.convertedQty > 0) qty += item.convertedQty;
+    }
+    if (qty > 0 && p.date) events.push({ date: p.date, qty });
+  }
+  if (events.length < 2) return null;
+  events.sort((a, b) => a.date.localeCompare(b.date));
+
+  let totalGap = 0;
+  for (let i = 1; i < events.length; i++) totalGap += daysBetween(events[i-1].date, events[i].date);
+  const avgInterval = totalGap / (events.length - 1);
+  const avgQty = events.reduce((s, e) => s + e.qty, 0) / events.length;
 
   return {
-    perDay: Math.max(0, perDay), // negative consumption makes no sense; clamp to 0
-    periodDays,
-    isReliable: periodDays >= 14,
+    perDay: avgInterval > 0 ? avgQty / avgInterval : 0,
+    periodDays: avgInterval,
+    isReliable: false, // purchase-based estimate, less reliable
+    source: 'purchases',
   };
 }
 
@@ -1250,6 +1269,9 @@ function computeStockSummary(article, outflowIndex, purchases, inventories, sale
       const days = daysBetween(latestInv.date, today);
       outflowsSince = rate.perDay * days;
       isEstimate = true; // consumable outflow is always projected
+      // Store rate source for display in alerts
+      if (rate.source) article._rateSource = rate.source;
+      if (!rate.isReliable) article._rateSourceWeak = true;
     } else {
       hasNoOutflows = true; // can't compute rate yet
     }
@@ -1787,40 +1809,43 @@ function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, i
 
     // ─── Stock empty / low ───────────────────────────────────────────────
 
-    // Always compute purchase-based estimate (no inventory needed)
-    const estimatedStock = computeEstimatedStockFromPurchases(article.id, purchases, today);
+    // Use purchase-based estimate ONLY if no completed inventory exists for this article
+    const hasInventory = inventories.some((inv) =>
+      inv.status === 'completed' &&
+      (inv.entries || []).some((e) => e.articleId === article.id)
+    );
 
-    if (estimatedStock) {
-      // Purchase-based estimate: compute threshold
-      const purchaseFreqData = {
-        avgIntervalDays: estimatedStock.daysElapsed / estimatedStock.purchaseCount,
-        perDay: estimatedStock.perDay,
-      };
-      const manualThreshold = article.manualThreshold;
-      const autoThreshold = estimatedStock.perDay > 0
-        ? estimatedStock.perDay * (purchaseFreqData.avgIntervalDays || 30) * 1.2
-        : null;
-      const threshold = manualThreshold != null ? manualThreshold : autoThreshold;
-
-      if (threshold != null && estimatedStock.value < threshold) {
-        const daysOfCover = estimatedStock.perDay > 0 ? Math.max(0, estimatedStock.value) / estimatedStock.perDay : null;
-        alerts.push({
-          article,
-          type: ALERT_TYPES.STOCK_LOW,
-          sortKey: estimatedStock.isNegative ? -900 : (daysOfCover ?? 50), // high priority
-          currentStock: estimatedStock.value,
-          isEstimate: true,
-          estimatedFromPurchases: true,
-          consumptionPerDay: estimatedStock.perDay,
-          daysOfCover,
-          threshold,
-          thresholdSource: manualThreshold != null ? 'manual' : 'purchase_history',
-          recommendation: estimatedStock.perDay > 0 ? estimatedStock.perDay * 30 : null,
-        });
-        continue; // skip inventory-based alert for this article — estimate is prioritary
+    if (!hasInventory) {
+      // No inventory → use purchase-based estimate
+      const estimatedStock = computeEstimatedStockFromPurchases(article.id, purchases, today);
+      if (estimatedStock) {
+        const manualThreshold = article.manualThreshold;
+        const avgInterval = estimatedStock.daysElapsed / Math.max(1, estimatedStock.purchaseCount);
+        const autoThreshold = estimatedStock.perDay > 0
+          ? estimatedStock.perDay * (avgInterval || 30) * 1.2
+          : null;
+        const threshold = manualThreshold != null ? manualThreshold : autoThreshold;
+        if (threshold != null && estimatedStock.value < threshold) {
+          const daysOfCover = estimatedStock.perDay > 0 ? Math.max(0, estimatedStock.value) / estimatedStock.perDay : null;
+          alerts.push({
+            article,
+            type: ALERT_TYPES.STOCK_LOW,
+            sortKey: estimatedStock.isNegative ? -900 : (daysOfCover ?? 50),
+            currentStock: estimatedStock.value,
+            isEstimate: true,
+            estimatedFromPurchases: true,
+            consumptionPerDay: estimatedStock.perDay,
+            daysOfCover,
+            threshold,
+            thresholdSource: manualThreshold != null ? 'manual' : 'purchase_history',
+            recommendation: estimatedStock.perDay > 0 ? estimatedStock.perDay * 30 : null,
+          });
+          continue;
+        }
       }
     }
 
+    // Inventory exists → use real stock summary
     if (summary && summary.isNegative) {
       // Always alert on empty stock, regardless of data history (it's a fact)
       alerts.push({
@@ -12691,6 +12716,8 @@ function StockAlertRow({ alert, onEditThreshold }) {
         <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2, marginLeft: 16 }}>
           {article.category}
           {estimatedFromPurchases && ' · Sans inventaire — stock calculé depuis l\'historique d\'achats'}
+          {!estimatedFromPurchases && isEstimate && article._rateSource === 'purchases' && ' · Conso estimée depuis achats (pas encore 2 inventaires)'}
+          {!estimatedFromPurchases && isEstimate && article._rateSource === 'inventories' && ' · Conso calculée depuis inventaires réels ✓'}
         </div>
       </div>
 
