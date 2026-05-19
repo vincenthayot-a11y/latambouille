@@ -2320,6 +2320,23 @@ function parsePackUnit(rawUnit) {
  * - All matching is accent-insensitive and case-insensitive
  * - Word-boundary matching: keyword must not be preceded/followed by a letter
  */
+const ARTICLE_CATEGORIES = [
+  'À trier',
+  'Fruits & légumes',
+  'Légumes & féculents',
+  'Viandes & volailles',
+  'Poissons & fruits de mer',
+  'Produits laitiers',
+  'Produits laitiers & œufs',
+  'Épicerie sèche',
+  'Épicerie sèche & condiments',
+  'Épices & condiments',
+  'Boissons & alcools',
+  'Glaces & sorbets',
+  'Hygiène & entretien',
+  'Autre',
+];
+
 const CATEGORY_KEYWORDS = [
   // ── Glaces & sorbets ──────────────────────────────────────────────────
   { kw: 'SORBE PEYI',    cat: 'Glaces & sorbets' },
