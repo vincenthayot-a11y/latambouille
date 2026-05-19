@@ -132,6 +132,8 @@ import {
   Layers,
   Zap,
   Wrench,
+  ClipboardList,
+  Download,
 } from 'lucide-react';
 import {
   BarChart,
@@ -3979,6 +3981,14 @@ select.mc-input { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:0.01ms !important; transition-duration:0.01ms !important; }
 }
+
+@media print {
+  body * { visibility: hidden; }
+  .mc-app, .mc-app * { visibility: hidden; }
+  .mc-print-zone, .mc-print-zone * { visibility: visible !important; }
+  .mc-print-zone { position: absolute; left: 0; top: 0; width: 100%; }
+  .mc-btn, nav, header { display: none !important; }
+}
 `;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4279,7 +4289,7 @@ function SyncStatusIndicator({ syncState, onClick }) {
 /**
  * Settings modal: configure Apps Script endpoint + token, enable/disable sync.
  */
-function SyncSettingsModal({ syncState, onClose }) {
+function SyncSettingsModal({ syncState, onClose, onExportBackup }) {
   const {
     enabled,
     endpoint: savedEndpoint,
@@ -4455,6 +4465,13 @@ function SyncSettingsModal({ syncState, onClose }) {
                 style={{ justifyContent: 'center', padding: '10px 16px' }}
               >
                 <Upload size={14} style={{ transform: 'rotate(180deg)' }} /> Récupérer Drive (pull → local)
+              </button>
+              <button
+                className="mc-btn mc-btn-ghost"
+                onClick={() => onExportBackup && onExportBackup()}
+                style={{ justifyContent: 'center', padding: '10px 16px', color: palette.sage }}
+              >
+                <Download size={14} /> Télécharger une sauvegarde JSON
               </button>
               <button
                 className="mc-btn mc-btn-danger"
@@ -4890,6 +4907,7 @@ export default function LaTambouille() {
     { id: 'equipment', label: 'Équipement', icon: Wrench },
     { id: 'energy', label: 'Énergie', icon: Zap },
     { id: 'alerts', label: 'Alertes', icon: AlertCircle },
+    { id: 'report', label: 'Rapport', icon: ClipboardList },
     { id: 'sales', label: 'Ventes CLYO', icon: Upload, locked: phase1Mode },
     { id: 'analytics', label: 'Analyses', icon: TrendingUp, locked: phase1Mode },
     { id: 'simulator', label: 'Simulateur', icon: Star },
@@ -5030,6 +5048,7 @@ export default function LaTambouille() {
           {activeTab === 'equipment' && <EquipmentView context={context} />}
           {activeTab === 'energy' && <EnergyView context={context} />}
           {activeTab === 'alerts' && <AlertsView context={context} />}
+          {activeTab === 'report' && <ReportView context={context} />}
           {/* Sales stays accessible even in phase 1 — it's how the user activates phase 2 */}
           {activeTab === 'sales' && <SalesView context={context} />}
           {activeTab === 'analytics' && (
@@ -5042,7 +5061,7 @@ export default function LaTambouille() {
       </div>
 
       {showSyncModal && (
-        <SyncSettingsModal syncState={driveSync} onClose={() => setShowSyncModal(false)} />
+        <SyncSettingsModal syncState={driveSync} onClose={() => setShowSyncModal(false)} onExportBackup={() => exportFullBackup(context)} />
       )}
 
       {driveSync.pendingConflict && (
@@ -14970,6 +14989,290 @@ function EquipmentInventoryEditor({ equipment, onSave, onCancel }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   REPORT VIEW + JSON BACKUP EXPORT
+// ═══════════════════════════════════════════════════════════════════════════
+
+function downloadJSON(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportFullBackup(context) {
+  const { articles, recipes, menus, purchases, sales, inventories, energy,
+          equipment, equipmentPurchases, equipmentInventories,
+          assets, assetMaintenance, assetInterventions, alertSettings } = context;
+  const today = new Date().toISOString().slice(0, 10);
+  const backup = {
+    exportDate: today,
+    appVersion: '5',
+    articles, recipes, menus, purchases, sales, inventories, energy,
+    equipment, equipmentPurchases, equipmentInventories,
+    assets, assetMaintenance, assetInterventions, alertSettings,
+  };
+  downloadJSON(backup, `latambouille-backup-${today}.json`);
+  mcToast.success('Sauvegarde téléchargée');
+}
+
+function ReportView({ context }) {
+  const { purchases, energy, equipment, equipmentPurchases, assetMaintenance,
+          assetInterventions, alertsIndex, articles } = context;
+
+  const now = new Date();
+  const currentMonthKey = now.toISOString().slice(0, 7);
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
+
+  // Build list of available months from purchases
+  const availableMonths = useMemo(() => {
+    const months = new Set();
+    for (const p of purchases) {
+      const m = (p.date || '').slice(0, 7);
+      if (m) months.add(m);
+    }
+    return [...months].sort((a, b) => b.localeCompare(a)).slice(0, 12);
+  }, [purchases]);
+
+  const prevMonth = useMemo(() => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const prev = new Date(y, m - 2, 1);
+    return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+  }, [selectedMonth]);
+
+  // Filter purchases to selected month
+  const monthPurchases = useMemo(() =>
+    purchases.filter((p) => (p.date || '').startsWith(selectedMonth)),
+  [purchases, selectedMonth]);
+
+  const prevMonthPurchases = useMemo(() =>
+    purchases.filter((p) => (p.date || '').startsWith(prevMonth)),
+  [purchases, prevMonth]);
+
+  // Top 5 most purchased articles (by total €)
+  const top5Purchased = useMemo(() => {
+    const byArticle = {};
+    for (const p of monthPurchases) {
+      for (const item of (p.items || [])) {
+        if (!item.articleId || !item.total) continue;
+        byArticle[item.articleId] = (byArticle[item.articleId] || 0) + item.total;
+      }
+    }
+    return Object.entries(byArticle)
+      .map(([id, total]) => ({ article: articles.find((a) => a.id === id), total }))
+      .filter((e) => e.article)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5);
+  }, [monthPurchases, articles]);
+
+  // Top 5 price increases vs previous month
+  const top5PriceIncreases = useMemo(() => {
+    const avgFor = (ps) => {
+      const map = {};
+      for (const p of ps) {
+        for (const item of (p.items || [])) {
+          if (!item.articleId || !(item.pricePerMasterUnit > 0) || !(item.convertedQty > 0)) continue;
+          if (!map[item.articleId]) map[item.articleId] = { totalValue: 0, totalQty: 0 };
+          map[item.articleId].totalValue += item.pricePerMasterUnit * item.convertedQty;
+          map[item.articleId].totalQty += item.convertedQty;
+        }
+      }
+      return Object.fromEntries(
+        Object.entries(map).map(([id, v]) => [id, v.totalQty > 0 ? v.totalValue / v.totalQty : 0])
+      );
+    };
+    const curr = avgFor(monthPurchases);
+    const prev = avgFor(prevMonthPurchases);
+    const increases = [];
+    for (const [id, currAvg] of Object.entries(curr)) {
+      if (!prev[id] || !(prev[id] > 0)) continue;
+      const pct = ((currAvg - prev[id]) / prev[id]) * 100;
+      if (pct > 0) {
+        const article = articles.find((a) => a.id === id);
+        if (article) increases.push({ article, pct, currAvg, prevAvg: prev[id] });
+      }
+    }
+    return increases.sort((a, b) => b.pct - a.pct).slice(0, 5);
+  }, [monthPurchases, prevMonthPurchases, articles]);
+
+  // Active alerts
+  const activeAlerts = alertsIndex.slice(0, 8);
+
+  // Month label
+  const monthLabel = (key) => {
+    const [y, m] = key.split('-');
+    const months = ['Janvier','Février','Mars','Avril','Mai','Juin',
+                    'Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+    return `${months[parseInt(m, 10) - 1]} ${y}`;
+  };
+
+  const totalMonth = monthPurchases.reduce((s, p) => s + (p.total || 0), 0);
+  const totalPrev = prevMonthPurchases.reduce((s, p) => s + (p.total || 0), 0);
+  const totalEvol = totalPrev > 0 ? ((totalMonth - totalPrev) / totalPrev) * 100 : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Rapport mensuel</h2>
+          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>Le Point de Vue · {monthLabel(selectedMonth)}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            style={{ padding: '8px 12px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }}
+          >
+            <option value={currentMonthKey}>{monthLabel(currentMonthKey)} (en cours)</option>
+            {availableMonths.filter((m) => m !== currentMonthKey).map((m) => (
+              <option key={m} value={m}>{monthLabel(m)}</option>
+            ))}
+          </select>
+          <button
+            className="mc-btn mc-btn-ghost"
+            onClick={() => window.print()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 13 }}
+          >
+            <Download size={14} /> Exporter PDF
+          </button>
+          <button
+            className="mc-btn mc-btn-ghost"
+            onClick={() => exportFullBackup(context)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 13, color: palette.sage }}
+          >
+            <Download size={14} /> Sauvegarde JSON
+          </button>
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+        <div className="mc-card" style={{ padding: 20 }}>
+          <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Total achats</div>
+          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 28, color: palette.ink }}>{formatEuro(totalMonth)}</div>
+          {totalEvol !== null && (
+            <div style={{ fontSize: 13, marginTop: 6, color: totalEvol > 10 ? palette.wine : totalEvol > 0 ? palette.amber : palette.sage, display: 'flex', alignItems: 'center', gap: 4 }}>
+              {totalEvol > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+              {totalEvol > 0 ? '+' : ''}{totalEvol.toFixed(1)}% vs {monthLabel(prevMonth)}
+            </div>
+          )}
+        </div>
+        <div className="mc-card" style={{ padding: 20 }}>
+          <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Factures du mois</div>
+          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 28, color: palette.ink }}>{monthPurchases.length}</div>
+          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 6 }}>
+            {[...new Set(monthPurchases.map((p) => p.supplier).filter(Boolean))].length} fournisseur(s)
+          </div>
+        </div>
+        <div className="mc-card" style={{ padding: 20 }}>
+          <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Alertes actives</div>
+          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 28, color: alertsIndex.length > 0 ? palette.wine : palette.sage }}>{alertsIndex.length}</div>
+          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 6 }}>
+            {alertsIndex.filter((a) => a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY).length} stock · {alertsIndex.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP).length} prix
+          </div>
+        </div>
+      </div>
+
+      {/* 2 columns */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+
+        {/* Top 5 most purchased */}
+        <div className="mc-card" style={{ padding: 20 }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Top 5 articles achetés</h3>
+          {top5Purchased.length === 0 ? (
+            <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>Aucun achat ce mois-ci.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {top5Purchased.map(({ article, total }, i) => {
+                const maxTotal = top5Purchased[0].total;
+                return (
+                  <div key={article.id}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
+                      <span style={{ color: palette.ink, fontWeight: i === 0 ? 600 : 400 }}>{article.name}</span>
+                      <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>{formatEuro(total)}</span>
+                    </div>
+                    <div style={{ height: 4, background: palette.rule, borderRadius: 2 }}>
+                      <div style={{ height: 4, width: `${(total / maxTotal) * 100}%`, background: palette.wine, borderRadius: 2, transition: 'width 400ms ease' }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Top 5 price increases */}
+        <div className="mc-card" style={{ padding: 20 }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Top 5 hausses de prix</h3>
+          {top5PriceIncreases.length === 0 ? (
+            <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>
+              Pas de données comparatives{prevMonthPurchases.length === 0 ? ` (aucun achat en ${monthLabel(prevMonth)})` : ' ce mois-ci.'}.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {top5PriceIncreases.map(({ article, pct, currAvg, prevAvg }) => (
+                <div key={article.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
+                  <div>
+                    <div style={{ color: palette.ink }}>{article.name}</div>
+                    <div style={{ fontSize: 11, color: palette.inkSoft }}>
+                      {formatEuro(prevAvg)}/{article.unit} → {formatEuro(currAvg)}/{article.unit}
+                    </div>
+                  </div>
+                  <span style={{
+                    background: pct > 15 ? palette.wine + '20' : palette.amber + '20',
+                    color: pct > 15 ? palette.wine : palette.amber,
+                    fontWeight: 600, fontSize: 12,
+                    padding: '3px 8px', borderRadius: 4,
+                  }}>
+                    +{pct.toFixed(1)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Active alerts */}
+      {activeAlerts.length > 0 && (
+        <div className="mc-card" style={{ padding: 20 }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Alertes actives</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {activeAlerts.map((alert, i) => {
+              const isStock = alert.type === ALERT_TYPES.STOCK_LOW || alert.type === ALERT_TYPES.STOCK_EMPTY;
+              const isPrice = alert.type === ALERT_TYPES.PRICE_TREND;
+              const isGap = alert.type === ALERT_TYPES.SUPPLIER_PRICE_GAP;
+              const color = alert.type === ALERT_TYPES.STOCK_EMPTY ? palette.wine : palette.amber;
+              const typeLabel = isStock ? 'Stock' : isPrice ? 'Prix' : isGap ? 'Écart fournisseur' : 'Alerte';
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: i < activeAlerts.length - 1 ? `1px solid ${palette.rule}` : 'none' }}>
+                  <span style={{ background: color + '20', color, fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, minWidth: 80, textAlign: 'center' }}>
+                    {typeLabel}
+                  </span>
+                  <span style={{ fontSize: 13, color: palette.ink, flex: 1 }}>{alert.article?.name || '—'}</span>
+                  <span style={{ fontSize: 12, color: palette.inkSoft }}>{alert.article?.category || ''}</span>
+                </div>
+              );
+            })}
+            {alertsIndex.length > 8 && (
+              <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic', paddingTop: 8 }}>
+                + {alertsIndex.length - 8} autre(s) alerte(s) dans l'onglet Alertes
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
