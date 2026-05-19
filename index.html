@@ -252,6 +252,7 @@ function migrateArticlesForStock(articles) {
       ...ing,
       stockType: needsType ? DEFAULT_STOCK_TYPE : ing.stockType,
       trackStock: needsTrack ? DEFAULT_TRACK_STOCK : ing.trackStock,
+      alertStock: ing.alertStock !== false, // default: alerts enabled
       type: needsKind ? 'food' : ing.type,
     };
   });
@@ -1796,6 +1797,7 @@ function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, i
 
   for (const article of articles) {
     if (article.trackStock === false) continue;
+    if (article.alertStock === false) continue; // user disabled alerts for this article
 
     // ─── Stock-side calculations ─────────────────────────────────────────
     const summary = computeStockSummary(
@@ -5754,6 +5756,18 @@ function ArticlesView({ context }) {
                     </button>
                     <button
                       className="mc-btn mc-btn-ghost"
+                      style={{ padding: '4px 10px', color: article.alertStock === false ? palette.inkSoft : palette.wine, opacity: article.alertStock === false ? 0.4 : 1 }}
+                      onClick={() => {
+                        const updated = { ...article, alertStock: article.alertStock === false ? true : false };
+                        setArticles(articles.map((a) => a.id === article.id ? updated : a));
+                        mcToast.success(updated.alertStock ? `Alertes activées : ${article.name}` : `Alertes désactivées : ${article.name}`);
+                      }}
+                      title={article.alertStock === false ? 'Alertes désactivées — cliquer pour activer' : 'Alertes activées — cliquer pour désactiver'}
+                    >
+                      <AlertCircle size={14} />
+                    </button>
+                    <button
+                      className="mc-btn mc-btn-ghost"
                       style={{ padding: '4px 10px' }}
                       onClick={() => setMergingArticle(article)}
                       title="Fusionner vers un autre article"
@@ -5818,6 +5832,7 @@ function ArticleModal({ initial, onSave, onClose }) {
     type: initial.type || 'food',
     stockType: initial.stockType || DEFAULT_STOCK_TYPE,
     trackStock: initial.trackStock !== false,
+    alertStock: initial.alertStock !== false,
     manualThreshold: initial.manualThreshold ?? '',
     id: initial.id,
   });
@@ -6009,6 +6024,32 @@ function ArticleModal({ initial, onSave, onClose }) {
                 {form.trackStock
                   ? 'Apparaît dans l\'onglet Stocks et sera inclus dans les inventaires.'
                   : 'L\'article reste utilisable dans les recettes mais n\'est pas suivi en stock.'}
+              </div>
+            </div>
+
+            {/* Alert toggle — independent from stock tracking */}
+            <div>
+              <label className="mc-label">Alerte de stock</label>
+              <label
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                  border: '1px solid ' + palette.rule, borderRadius: 6, cursor: 'pointer',
+                  background: form.alertStock !== false ? palette.wine + '08' : 'transparent',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={form.alertStock !== false}
+                  onChange={(e) => setForm({ ...form, alertStock: e.target.checked })}
+                />
+                <span style={{ fontSize: 12, fontWeight: 600 }}>
+                  {form.alertStock !== false ? 'Alertes activées' : 'Alertes désactivées'}
+                </span>
+              </label>
+              <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 6, lineHeight: 1.5 }}>
+                {form.alertStock !== false
+                  ? 'Une alerte se déclenchera quand le stock passe sous le seuil.'
+                  : 'Aucune alerte pour cet article. Le suivi de stock reste actif.'}
               </div>
             </div>
 
