@@ -186,6 +186,8 @@ const STORAGE_KEYS = {
   assetInterventions: 'mc5:assetInterventions',    // pannes & réparations ponctuelles
   initialized: 'mc5:initialized',
   aiModel: 'mc5:aiModel',
+  scanPrompt: 'mc5:scanPrompt',
+  importClaudePrompt: 'mc5:importClaudePrompt',
   alertSettings: 'mc5:alertSettings',
   sidebarCollapsed: 'mc5:sidebarCollapsed',
   userSettings: 'mc5:userSettings',
@@ -3754,11 +3756,11 @@ function useDriveSync({ data, applyRemoteData }) {
 //   AI INVOICE SCAN PROMPT
 // ═══════════════════════════════════════════════════════════════════════════
 
-const SCAN_PROMPT = `Tu es expert en factures fournisseurs pour la restauration (Antilles/Martinique + Métropole).
-Fournisseurs courants : SOFRIMA, CAREX SAS, MULTIGROS, CARIDRINK, MHE, MHP, CALYPSO, ERPEM, SAS EDOUARD, ROGER ALBERT, LEVERT EMBALLAGES.
+const DEFAULT_SCAN_PROMPT = `Tu es expert en factures fournisseurs pour la restauration (Antilles/Martinique + Métropole).
+Fournisseurs courants : SOFRIMA, CAREX SAS, MULTIGROS, CARIDRINK, MHE, MHP, CALYPSO, ERPEM, SAS EDOUARD, ROGER ALBERT, LEVERT EMBALLAGES, EQUIP'PRO.
 
 RÈGLE CRITIQUE HT vs TTC :
-Tous les montants doivent être en HT. Utilise toujours la colonne "Prix U. HT" (ou PUHT) × Qté.
+Tous les montants doivent être en HT. Utilise toujours la colonne "Prix U. HT" (ou PUHT, Prix Net HT) × Qté.
 Ne jamais utiliser la colonne TTC. Vérification : somme des items ≈ Total HT affiché en bas.
 
 LIGNES À EXCLURE (ne pas créer d'item) :
@@ -3768,10 +3770,22 @@ LIGNES À EXCLURE (ne pas créer d'item) :
 
 RÈGLES DE QUANTITÉ PAR FOURNISSEUR :
 
-SOFRIMA — colonnes : Article | colis | Qte/poids | U/V | Désignation | Prix Net HT | Montant HT
-- Colonne U = unités à multiplier par le poids du libellé
-- Colonne K = kg directs
+SOFRIMA — colonnes : Article | colis | Qté/poids | U/V | Désignation | Prix Net HT | Montant HT | TVA | V.effectif | Pcb
+- Qté/poids = quantité TOTALE (déjà multipliée par colis), pareil que MULTIGROS
+- U/V : "K" = kg (la quantité est DÉJÀ en kg) ; "U" = unité (à convertir selon poids/volume du libellé)
+- V.effectif = volume effectif PAR UNITÉ (1,000 = 1 L ; 5,000 = 5 L ; 50,000 = 50 cl)
+- Pcb = unités par colis (info indicative, ne pas l'utiliser pour calculer rawQty)
+- Codes TVA : 1 = 0% / 2 = 2,10% / 3 = 8,50% (alcools)
 - "2K5" = 2.5kg, "10K" = 10kg, "800G" = 0.8kg, "1L5" = 1.5L
+PRODUITS SOFRIMA À RÈGLES SPÉCIFIQUES :
+- Code 1308010 "COCA-COLA BTLLE 50CL" : 1 U = pack de 8 bouteilles 50cl
+  → rawQty = nb_U × 8 × 0.5 en L, rawUnit = "L" (~0,98€/btl, ~1,96€/L)
+- Code 1302156 "COCA-COLA ZERO 50CL" : bouteille individuelle
+  → rawQty = nb_U × 0.5 en L, rawUnit = "L" (~0,85€/btl)
+- "LAIT NEUTRE 1/2 ECREME" : briques 1L
+  → rawQty = nb_U en L, rawUnit = "L"
+- "CABRI DECOUPE 2KG X 5" : prix indiqué = 19,14€/kg, la Qté est en kg même si affichée "U"
+  → rawQty = Qté en kg
 
 MULTIGROS — colonnes : Colis | Qté | T | Prix U.HT | Montant HT
 - Qté = quantité TOTALE (ne pas multiplier Colis × Qté)
@@ -3798,7 +3812,7 @@ CONSERVES de fruits/légumes/lait concentré → en kg :
 - rawQty = nb_boîtes × poids_unitaire_kg
 - "ANANAS SIR TR 3/4 565G", 24 pièces → rawQty=13.56, rawUnit="kg"
 - "TOMATES CONCASSEES 5/1", 3 boîtes → rawQty=12 (3×4kg), rawUnit="kg"
-- Lait UHT/frais en brique (ex: "LAIT 1/2 ECREME 1L") → reste en L
+- Lait UHT/frais en brique (ex: "LAIT 1/2 ECREME 1L", "LAIT NEUTRE 1/2 ECREME") → reste en L
 
 PRODUITS LIQUIDES en bidon/seau → en litres :
 - rawQty = nb_unités × volume_L
@@ -3848,7 +3862,10 @@ Exemples clés :
 - "LENTILLE BLONDE 1KG BINA" MULTIGROS Qté=24 → rawQty=24, rawUnit="kg"
 - "COCA COLA 50CL" MULTIGROS Qté=80 → rawQty=80, rawUnit="pièce"
 - "ANANAS SIR TR 3/4 565G PSP", 24 → rawQty=13.56kg
-- "DZ CTX STEAK ALIDA/HOTEL", 9 → rawQty=108 pièces`;
+- "DZ CTX STEAK ALIDA/HOTEL", 9 → rawQty=108 pièces
+- SOFRIMA code 1308010 "COCA-COLA BTLLE 50CL", 12 U → rawQty=48 L (12×8×0.5)
+- SOFRIMA code 1302156 "COCA-COLA ZERO 50CL", 32 U → rawQty=16 L (32×0.5)
+- SOFRIMA "LAIT NEUTRE 1/2 ECREME", 6 U → rawQty=6 L`;
 
 // ─── Reusable invoice scan helper ─────────────────────────────────────────
 
@@ -3893,13 +3910,14 @@ async function scanInvoiceFile(file, articles) {
 
   // Step 3: call API with the user's chosen model + API key
   const chosenModel = await storageGet(STORAGE_KEYS.aiModel, DEFAULT_AI_MODEL);
+  const scanPrompt = await storageGet(STORAGE_KEYS.scanPrompt, DEFAULT_SCAN_PROMPT);
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: chosenModel,
       max_tokens: 4096,
-      messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: SCAN_PROMPT }] }],
+      messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt }] }],
     }),
   });
 
@@ -4627,6 +4645,11 @@ function SyncSettingsModal({ syncState, onClose, onExportBackup }) {
         <div style={{ marginTop: 24, paddingTop: 24, borderTop: `1px solid ${palette.rule}` }}>
           <AiModelSelector />
         </div>
+
+        {/* Scan prompt editor — lets the user add new rules without rebuilding the HTML */}
+        <div style={{ marginTop: 24, paddingTop: 24, borderTop: `1px solid ${palette.rule}` }}>
+          <ScanPromptEditor />
+        </div>
       </div>
     </div>
   );
@@ -4729,6 +4752,195 @@ function AiModelSelector() {
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Lets the user view and edit the prompt sent to Claude during invoice scanning.
+ * The custom prompt is persisted in localStorage; a "Restore default" button
+ * brings back the built-in DEFAULT_SCAN_PROMPT. This means new scanning rules
+ * (e.g. supplier-specific quirks) can be added without rebuilding the HTML.
+ */
+function ScanPromptEditor() {
+  const [draft, setDraft] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
+
+  // Load whatever is in storage (or the default) on mount
+  useEffect(() => {
+    storageGet(STORAGE_KEYS.scanPrompt, DEFAULT_SCAN_PROMPT).then((p) => {
+      setDraft(p);
+      setLoaded(true);
+    });
+  }, []);
+
+  const isCustomized = loaded && draft !== DEFAULT_SCAN_PROMPT;
+  const charCount = draft.length;
+
+  const handleSave = async () => {
+    if (draft === DEFAULT_SCAN_PROMPT) {
+      // No need to clutter storage with a copy of the default
+      await storageSet(STORAGE_KEYS.scanPrompt, null);
+    } else {
+      await storageSet(STORAGE_KEYS.scanPrompt, draft);
+    }
+    setSavedAt(new Date());
+    mcToast.success('Prompt de scan enregistré');
+    setTimeout(() => setSavedAt(null), 2000);
+  };
+
+  const handleReset = () => {
+    mcToast.undo(
+      'Prompt restauré à sa valeur par défaut',
+      () => setDraft(draft), // no-op (we haven't actually wiped yet on undo)
+      async () => {
+        setDraft(DEFAULT_SCAN_PROMPT);
+        await storageSet(STORAGE_KEYS.scanPrompt, null);
+      },
+    );
+    // Actually apply the reset now (undo will revert via the toast's undo callback)
+    setDraft(DEFAULT_SCAN_PROMPT);
+    storageSet(STORAGE_KEYS.scanPrompt, null);
+  };
+
+  if (!loaded) {
+    return (
+      <div>
+        <h4 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+          Prompt de scan
+        </h4>
+        <p style={{ fontSize: 12, color: palette.inkSoft, margin: '8px 0 0' }}>Chargement…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <h4 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+          Prompt envoyé à l'IA lors du scan
+          {isCustomized && (
+            <span
+              style={{
+                marginLeft: 8,
+                fontSize: 10,
+                fontWeight: 700,
+                color: palette.amber,
+                background: palette.amber + '20',
+                padding: '2px 8px',
+                borderRadius: 999,
+                textTransform: 'uppercase',
+                letterSpacing: 0.5,
+              }}
+            >
+              Personnalisé
+            </span>
+          )}
+        </h4>
+        {savedAt && (
+          <span style={{ fontSize: 11, color: palette.sage, fontWeight: 600 }}>
+            ✓ Enregistré
+          </span>
+        )}
+      </div>
+
+      <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 8px' }}>
+        Ce texte est envoyé à Claude avec chaque facture scannée. Vous pouvez l'éditer
+        pour ajouter de nouvelles règles (produits spécifiques, fournisseurs, conversions…)
+        sans avoir à reconstruire l'application.{' '}
+        <button
+          type="button"
+          onClick={() => setShowHelp((s) => !s)}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            color: palette.wine,
+            cursor: 'pointer',
+            textDecoration: 'underline',
+            fontSize: 12,
+          }}
+        >
+          {showHelp ? 'Masquer l\'aide' : 'Aide'}
+        </button>
+      </p>
+
+      {showHelp && (
+        <div
+          style={{
+            fontSize: 11,
+            color: palette.inkSoft,
+            background: palette.paper,
+            border: `1px solid ${palette.rule}`,
+            borderRadius: 6,
+            padding: 10,
+            margin: '0 0 10px',
+            lineHeight: 1.6,
+          }}
+        >
+          <strong style={{ color: palette.ink }}>Conseils :</strong>
+          <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+            <li>Le prompt doit demander une réponse en JSON strict (le schéma JSON à la fin est obligatoire).</li>
+            <li>Pour ajouter une règle, copiez la structure existante d'un fournisseur (ex. SOFRIMA) et adaptez-la.</li>
+            <li>Sauvegardez avant de scanner une nouvelle facture pour que la règle soit prise en compte.</li>
+            <li>« Restaurer le défaut » remet le prompt fourni avec l'application (utile en cas d'erreur).</li>
+          </ul>
+        </div>
+      )}
+
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className="mc-input"
+        rows={20}
+        spellCheck={false}
+        style={{
+          width: '100%',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          fontSize: 11,
+          lineHeight: 1.5,
+          resize: 'vertical',
+          minHeight: 200,
+          whiteSpace: 'pre',
+          overflowX: 'auto',
+        }}
+      />
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10,
+          marginTop: 8,
+          flexWrap: 'wrap',
+        }}
+      >
+        <span style={{ fontSize: 11, color: palette.inkSoft }}>
+          {charCount.toLocaleString('fr-FR')} caractères
+        </span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            className="mc-btn mc-btn-ghost"
+            onClick={handleReset}
+            disabled={!isCustomized}
+            style={{ padding: '8px 14px' }}
+          >
+            Restaurer le défaut
+          </button>
+          <button
+            type="button"
+            className="mc-btn mc-btn-primary"
+            onClick={handleSave}
+            style={{ padding: '8px 14px' }}
+          >
+            Enregistrer le prompt
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -9719,7 +9931,7 @@ const BATCH_PARALLELISM = 3;
 //   - For unknown labels, auto-creates article + variant (Q2 = D)
 //   - For duplicates, the existing purchase is OVERWRITTEN (Q4 = A with warning)
 
-const IMPORT_CLAUDE_PROMPT = `Voici une ou plusieurs factures fournisseur de mon restaurant.
+const DEFAULT_IMPORT_CLAUDE_PROMPT = `Voici une ou plusieurs factures fournisseur de mon restaurant.
 Pour chacune, extrais les informations dans UN SEUL JSON au format exact ci-dessous :
 
 {
@@ -9900,6 +10112,21 @@ function ImportClaudeModal({ articles, setArticles, existingPurchases, setPurcha
   const [showPromptHelp, setShowPromptHelp] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
 
+  // Editable prompt: loaded from storage on mount, falls back to default.
+  // Persisted on "Save", reset to default on "Restore".
+  const [currentPrompt, setCurrentPrompt] = useState(DEFAULT_IMPORT_CLAUDE_PROMPT);
+  const [editingPrompt, setEditingPrompt] = useState(false);
+  const [promptDraft, setPromptDraft] = useState(DEFAULT_IMPORT_CLAUDE_PROMPT);
+  const [promptLoaded, setPromptLoaded] = useState(false);
+
+  useEffect(() => {
+    storageGet(STORAGE_KEYS.importClaudePrompt, DEFAULT_IMPORT_CLAUDE_PROMPT).then((p) => {
+      setCurrentPrompt(p);
+      setPromptDraft(p);
+      setPromptLoaded(true);
+    });
+  }, []);
+
   // Dry-run result: populated after the user clicks "Analyser"
   // {
   //   invoices: [{ original, candidatePurchase, isDuplicate, newArticles[] }],
@@ -9922,13 +10149,37 @@ function ImportClaudeModal({ articles, setArticles, existingPurchases, setPurcha
 
   const copyPromptToClipboard = async () => {
     try {
-      await navigator.clipboard.writeText(IMPORT_CLAUDE_PROMPT);
+      await navigator.clipboard.writeText(currentPrompt);
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2000);
     } catch (err) {
       // Fallback: select the textarea content for manual copy
       console.warn('Clipboard API unavailable', err);
     }
+  };
+
+  const savePromptEdits = async () => {
+    if (promptDraft === DEFAULT_IMPORT_CLAUDE_PROMPT) {
+      // No need to clutter storage with a copy of the default
+      await storageSet(STORAGE_KEYS.importClaudePrompt, null);
+    } else {
+      await storageSet(STORAGE_KEYS.importClaudePrompt, promptDraft);
+    }
+    setCurrentPrompt(promptDraft);
+    setEditingPrompt(false);
+    mcToast.success('Prompt enregistré');
+  };
+
+  const resetPromptToDefault = async () => {
+    await storageSet(STORAGE_KEYS.importClaudePrompt, null);
+    setCurrentPrompt(DEFAULT_IMPORT_CLAUDE_PROMPT);
+    setPromptDraft(DEFAULT_IMPORT_CLAUDE_PROMPT);
+    mcToast.success('Prompt restauré à sa valeur par défaut');
+  };
+
+  const cancelPromptEdits = () => {
+    setPromptDraft(currentPrompt);
+    setEditingPrompt(false);
   };
 
   /**
@@ -10333,6 +10584,14 @@ function ImportClaudeModal({ articles, setArticles, existingPurchases, setPurcha
             setShowPromptHelp={setShowPromptHelp}
             copySuccess={copySuccess}
             copyPromptToClipboard={copyPromptToClipboard}
+            currentPrompt={currentPrompt}
+            editingPrompt={editingPrompt}
+            setEditingPrompt={setEditingPrompt}
+            promptDraft={promptDraft}
+            setPromptDraft={setPromptDraft}
+            savePromptEdits={savePromptEdits}
+            resetPromptToDefault={resetPromptToDefault}
+            cancelPromptEdits={cancelPromptEdits}
             onAnalyze={handleAnalyze}
           />
         ) : (
@@ -10359,7 +10618,27 @@ function ImportClaudeModal({ articles, setArticles, existingPurchases, setPurcha
 
 // ─── ImportClaudeModal: step 1 (paste JSON) ───────────────────────────────
 
-function ImportClaudeInputStep({ jsonText, setJsonText, parseError, showPromptHelp, setShowPromptHelp, copySuccess, copyPromptToClipboard, onAnalyze }) {
+function ImportClaudeInputStep({
+  jsonText,
+  setJsonText,
+  parseError,
+  showPromptHelp,
+  setShowPromptHelp,
+  copySuccess,
+  copyPromptToClipboard,
+  currentPrompt,
+  editingPrompt,
+  setEditingPrompt,
+  promptDraft,
+  setPromptDraft,
+  savePromptEdits,
+  resetPromptToDefault,
+  cancelPromptEdits,
+  onAnalyze,
+}) {
+  const isCustomized = currentPrompt !== DEFAULT_IMPORT_CLAUDE_PROMPT;
+  const draftDiffersFromCurrent = promptDraft !== currentPrompt;
+
   return (
     <div style={{ padding: '20px 28px' }}>
       {/* How-to box */}
@@ -10381,25 +10660,57 @@ function ImportClaudeInputStep({ jsonText, setJsonText, parseError, showPromptHe
         </ol>
       </div>
 
-      {/* Prompt toggle + copy */}
+      {/* Prompt toggle + copy / edit */}
       <div style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
           <button
             className="mc-btn mc-btn-ghost"
             onClick={() => setShowPromptHelp(!showPromptHelp)}
             style={{ padding: '6px 10px', fontSize: 12 }}
           >
             {showPromptHelp ? '▾' : '▸'} Prompt à utiliser dans Claude.ai
+            {isCustomized && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontSize: 9,
+                  fontWeight: 700,
+                  color: palette.amber,
+                  background: palette.amber + '20',
+                  padding: '2px 6px',
+                  borderRadius: 999,
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.5,
+                }}
+              >
+                Personnalisé
+              </span>
+            )}
           </button>
-          <button
-            className="mc-btn mc-btn-primary"
-            onClick={copyPromptToClipboard}
-            style={{ padding: '6px 12px', fontSize: 12 }}
-          >
-            {copySuccess ? '✓ Copié' : 'Copier le prompt'}
-          </button>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {showPromptHelp && !editingPrompt && (
+              <button
+                className="mc-btn mc-btn-ghost"
+                onClick={() => setEditingPrompt(true)}
+                style={{ padding: '6px 12px', fontSize: 12 }}
+                title="Modifier le prompt pour ajouter vos propres règles"
+              >
+                ✏️ Modifier
+              </button>
+            )}
+            <button
+              className="mc-btn mc-btn-primary"
+              onClick={copyPromptToClipboard}
+              style={{ padding: '6px 12px', fontSize: 12 }}
+              disabled={editingPrompt}
+              title={editingPrompt ? 'Enregistrez d\'abord vos modifications' : ''}
+            >
+              {copySuccess ? '✓ Copié' : 'Copier le prompt'}
+            </button>
+          </div>
         </div>
-        {showPromptHelp && (
+
+        {showPromptHelp && !editingPrompt && (
           <pre style={{
             background: palette.ink,
             color: palette.cream,
@@ -10411,7 +10722,74 @@ function ImportClaudeInputStep({ jsonText, setJsonText, parseError, showPromptHe
             maxHeight: 240,
             whiteSpace: 'pre-wrap',
             margin: 0,
-          }}>{IMPORT_CLAUDE_PROMPT}</pre>
+          }}>{currentPrompt}</pre>
+        )}
+
+        {showPromptHelp && editingPrompt && (
+          <div>
+            <textarea
+              value={promptDraft}
+              onChange={(e) => setPromptDraft(e.target.value)}
+              spellCheck={false}
+              style={{
+                width: '100%',
+                minHeight: 280,
+                maxHeight: 500,
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                fontSize: 11,
+                lineHeight: 1.5,
+                padding: 12,
+                borderRadius: 6,
+                border: `1px solid ${palette.rule}`,
+                background: palette.cream,
+                color: palette.ink,
+                resize: 'vertical',
+                whiteSpace: 'pre',
+                overflowX: 'auto',
+                boxSizing: 'border-box',
+              }}
+            />
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                marginTop: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <span style={{ fontSize: 11, color: palette.inkSoft }}>
+                {promptDraft.length.toLocaleString('fr-FR')} caractères
+              </span>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  className="mc-btn mc-btn-ghost"
+                  onClick={resetPromptToDefault}
+                  disabled={promptDraft === DEFAULT_IMPORT_CLAUDE_PROMPT && !isCustomized}
+                  style={{ padding: '6px 12px', fontSize: 12 }}
+                  title="Recharger la version livrée avec l'application"
+                >
+                  Restaurer le défaut
+                </button>
+                <button
+                  className="mc-btn mc-btn-ghost"
+                  onClick={cancelPromptEdits}
+                  style={{ padding: '6px 12px', fontSize: 12 }}
+                >
+                  Annuler
+                </button>
+                <button
+                  className="mc-btn mc-btn-primary"
+                  onClick={savePromptEdits}
+                  disabled={!draftDiffersFromCurrent}
+                  style={{ padding: '6px 12px', fontSize: 12 }}
+                >
+                  Enregistrer
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
