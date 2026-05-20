@@ -10,6 +10,13 @@
 
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%237A1F2B'/%3E%3Ctext x='50' y='70' font-family='Georgia,serif' font-size='64' font-weight='700' text-anchor='middle' fill='%23FBF8F3'%3ET%3C/text%3E%3C/svg%3E" />
 
+  <!-- Préchargement des fontes : déclaré ici dans <head> pour démarrer le téléchargement
+       le plus tôt possible (avant l'exécution de Babel + JS), avec font-display: swap
+       pour éviter le FOIT (texte invisible) le temps que les fontes arrivent. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=DM+Sans:wght@400;500;600;700&display=swap" />
+
   <script type="importmap">
   {
     "imports": {
@@ -134,6 +141,11 @@ import {
   Wrench,
   ClipboardList,
   Download,
+  Lock,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings,
 } from 'lucide-react';
 import {
   BarChart,
@@ -175,6 +187,8 @@ const STORAGE_KEYS = {
   initialized: 'mc5:initialized',
   aiModel: 'mc5:aiModel',
   alertSettings: 'mc5:alertSettings',
+  sidebarCollapsed: 'mc5:sidebarCollapsed',
+  userSettings: 'mc5:userSettings',
 };
 
 // ─── Catalogue des modèles IA disponibles pour le scan de factures ───────
@@ -340,7 +354,10 @@ const chartColors = [
   '#2B5A8B',
 ];
 
-const fontImport = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=DM+Sans:wght@400;500;600;700&display=swap');`;
+// Les fontes sont préchargées via <link rel="stylesheet"> dans <head> (cf. début
+// du fichier HTML), ce qui démarre le téléchargement avant l'exécution de Babel.
+// On laisse cette constante vide pour ne pas casser l'interpolation dans globalStyles.
+const fontImport = ``;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //   TOAST SYSTEM
@@ -370,6 +387,52 @@ function ToastContainer() {
   }, []);
   const dismiss = (id) => setToasts((prev) => prev.filter((t) => t.id !== id));
   const handleUndo = (toast) => { try { toast.onUndo?.(); } catch (e) { console.error('Undo error:', e); } dismiss(toast.id); };
+
+  // ─── Raccourcis clavier ────────────────────────────────────────────────
+  //  · Esc           → dismisser le toast le plus récent
+  //  · Cmd/Ctrl + Z  → déclencher l'undo du toast `undo` le plus récent
+  // On utilise un ref pour lire toujours la dernière version de `toasts`
+  // sans avoir à re-binder l'event listener à chaque changement.
+  const toastsRef = useRef(toasts);
+  useEffect(() => { toastsRef.current = toasts; }, [toasts]);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const current = toastsRef.current;
+      if (current.length === 0) return;
+
+      // Ne pas intercepter si l'utilisateur est en train de taper dans un champ.
+      const target = e.target;
+      const isEditable = target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      );
+
+      // Esc → dismisser le dernier toast (sauf si focus dans un champ : Esc sert souvent
+      // à fermer une modale ou perdre le focus, on ne veut pas voler ce comportement).
+      if (e.key === 'Escape' && !isEditable) {
+        const latest = current[current.length - 1];
+        dismiss(latest.id);
+        e.preventDefault();
+        return;
+      }
+
+      // Cmd/Ctrl + Z → undo le dernier toast de type 'undo' (on intercepte même
+      // dans un champ pour offrir l'undo global même pendant la saisie).
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        const lastUndo = [...current].reverse().find((t) => t.type === 'undo' && t.onUndo);
+        if (lastUndo) {
+          handleUndo(lastUndo);
+          e.preventDefault();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   if (toasts.length === 0) return null;
   return (
     <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, display: 'flex', flexDirection: 'column-reverse', gap: 10, pointerEvents: 'none', maxWidth: 'calc(100vw - 48px)' }}>
@@ -380,11 +443,11 @@ function ToastContainer() {
             <span style={{ fontSize: 16, opacity: 0.9 }}>{colors.icon}</span>
             <span style={{ flex: 1 }}>{toast.message}</span>
             {toast.type === 'undo' && toast.onUndo && (
-              <button onClick={() => handleUndo(toast)} style={{ background: 'rgba(255,255,255,0.18)', color: colors.fg, border: 'none', padding: '6px 12px', borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <button onClick={() => handleUndo(toast)} title="Annuler (Ctrl/Cmd + Z)" style={{ background: 'rgba(255,255,255,0.18)', color: colors.fg, border: 'none', padding: '6px 12px', borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
                 Annuler
               </button>
             )}
-            <button onClick={() => dismiss(toast.id)} style={{ background: 'none', color: colors.fg, border: 'none', padding: '4px 6px', fontSize: 16, cursor: 'pointer', opacity: 0.6 }}>×</button>
+            <button onClick={() => dismiss(toast.id)} title="Fermer (Esc)" style={{ background: 'none', color: colors.fg, border: 'none', padding: '4px 6px', fontSize: 16, cursor: 'pointer', opacity: 0.6 }}>×</button>
           </div>
         );
       })}
@@ -2366,6 +2429,55 @@ const ARTICLE_CATEGORIES = [
   'Autre',
 ];
 
+// ═══════════════════════════════════════════════════════════════════════════
+//   USER SETTINGS — paramètres modifiables par l'utilisateur
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Tout ce qui peut être ajusté depuis l'onglet « Réglages ». Les valeurs
+// par défaut viennent des constantes du fichier (ARTICLE_CATEGORIES,
+// EQUIPMENT_CATEGORIES, ASSET_CATEGORIES, et les seuils ci-dessus).
+// Une fois personnalisées, elles sont persistées sous mc5:userSettings.
+
+const DEFAULT_USER_SETTINGS = {
+  articleCategories: ARTICLE_CATEGORIES.slice(),
+  equipmentCategories: EQUIPMENT_CATEGORIES.slice(),
+  assetCategories: ASSET_CATEGORIES.slice(),
+  thresholds: {
+    // Food cost : les seuils qui pilotent la couleur (sage / amber / wine)
+    // dans StatusPill, FoodCostChip et les KPI du dashboard.
+    foodCostGreen: 0.30,   // sous ce seuil : sage (bien)
+    foodCostAmber: 0.35,   // entre les deux : amber ; au-dessus : wine
+    // Tendance de prix : seuil au-delà duquel on alerte sur une hausse
+    priceTrendPct: 15,
+    // Écart entre fournisseurs : seuil au-delà duquel on alerte
+    supplierGapPct: 20,
+  },
+};
+
+// Fusionne les réglages chargés du storage avec les défauts pour gérer
+// l'évolution du modèle (nouveaux champs ajoutés en cours de route).
+function mergeUserSettings(loaded) {
+  const d = DEFAULT_USER_SETTINGS;
+  if (!loaded || typeof loaded !== 'object') return {
+    articleCategories: d.articleCategories.slice(),
+    equipmentCategories: d.equipmentCategories.slice(),
+    assetCategories: d.assetCategories.slice(),
+    thresholds: { ...d.thresholds },
+  };
+  return {
+    articleCategories: Array.isArray(loaded.articleCategories) && loaded.articleCategories.length > 0
+      ? loaded.articleCategories
+      : d.articleCategories.slice(),
+    equipmentCategories: Array.isArray(loaded.equipmentCategories) && loaded.equipmentCategories.length > 0
+      ? loaded.equipmentCategories
+      : d.equipmentCategories.slice(),
+    assetCategories: Array.isArray(loaded.assetCategories) && loaded.assetCategories.length > 0
+      ? loaded.assetCategories
+      : d.assetCategories.slice(),
+    thresholds: { ...d.thresholds, ...(loaded.thresholds || {}) },
+  };
+}
+
 const CATEGORY_KEYWORDS = [
   // ── Glaces & sorbets ──────────────────────────────────────────────────
   { kw: 'SORBE PEYI',    cat: 'Glaces & sorbets' },
@@ -3975,6 +4087,13 @@ select.mc-input { cursor: pointer; }
 @keyframes mc-pill-pulse { 0%,100% { box-shadow:0 0 0 0 transparent; } 50% { box-shadow:0 0 0 4px rgba(122,31,43,0.10); } }
 .mc-pill-alert { animation: mc-pill-pulse 2.4s ease-in-out infinite; }
 
+/* Tooltip de la sidebar : petit fade-in + léger glissement depuis la gauche
+   pour suggérer qu'il sort de l'item survolé. */
+@keyframes mc-tooltip-fade-in {
+  from { opacity: 0; transform: translateY(-50%) translateX(-4px); }
+  to   { opacity: 1; transform: translateY(-50%) translateX(0); }
+}
+
 .mc-btn { transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 60ms ease; }
 .mc-btn:active:not(:disabled) { transform: scale(0.98); }
 
@@ -3997,7 +4116,8 @@ select.mc-input { cursor: pointer; }
 
 function PeriodSelector({ period, setPeriod, customFrom, setCustomFrom, customTo, setCustomTo }) {
   const options = [
-    ['7j', '7J'],
+    // 7 jours retiré : trop bruité en restauration (variabilité hebdomadaire forte).
+    // On commence à 30 jours, qui est le plus petit horizon vraiment lisible.
     ['30j', '30J'],
     ['90j', '90J'],
     ['365j', '1A'],
@@ -4214,9 +4334,18 @@ function SyncStatusIndicator({ syncState, onClick }) {
   const { enabled, status, lastSyncedAt, error } = syncState;
 
   // Visual config per status
+  // Note pour l'état "non connecté" : on traite ce cas comme une vraie CTA
+  // (icône +, libellé invitant, accent wine) plutôt qu'un état neutre, pour
+  // que la première chose qu'un nouvel utilisateur voie en haut à droite soit
+  // une invitation explicite à sauvegarder dans Drive.
   const config = (() => {
     if (!enabled) {
-      return { color: palette.inkSoft, icon: '○', label: 'Drive désactivé' };
+      return {
+        color: palette.wine,
+        icon: '+',
+        label: 'Connecter Drive',
+        cta: true,
+      };
     }
     switch (status) {
       case 'syncing':
@@ -4247,20 +4376,24 @@ function SyncStatusIndicator({ syncState, onClick }) {
       ? formatRelative(lastSyncedAt)
       : enabled && status === 'error'
       ? (error || '').slice(0, 40)
+      : !enabled
+      ? 'Sauvegarder vos données →'
       : null;
 
   return (
     <button
       onClick={onClick}
-      title="Paramètres de synchronisation Drive"
+      title={config.cta ? 'Activer la synchronisation Drive' : 'Paramètres de synchronisation Drive'}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
         gap: 8,
         padding: '6px 12px',
         borderRadius: 6,
-        border: '1px solid ' + palette.rule,
-        background: 'transparent',
+        // Bordure plus marquée et fond légèrement teinté pour l'état CTA
+        // (non connecté), afin de le distinguer des indicateurs neutres.
+        border: '1px solid ' + (config.cta ? palette.wine + '60' : palette.rule),
+        background: config.cta ? palette.wine + '08' : 'transparent',
         cursor: 'pointer',
         fontFamily: 'DM Sans, sans-serif',
         fontSize: 12,
@@ -4268,7 +4401,8 @@ function SyncStatusIndicator({ syncState, onClick }) {
     >
       <span
         style={{
-          fontSize: 16,
+          fontSize: config.cta ? 14 : 16,
+          fontWeight: config.cta ? 700 : 400,
           color: config.color,
           lineHeight: 1,
           animation: config.spin ? 'spin 1.5s linear infinite' : undefined,
@@ -4277,7 +4411,7 @@ function SyncStatusIndicator({ syncState, onClick }) {
         {config.icon}
       </span>
       <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.2 }}>
-        <span style={{ fontWeight: 600, color: palette.ink }}>{config.label}</span>
+        <span style={{ fontWeight: 600, color: config.cta ? palette.wine : palette.ink }}>{config.label}</span>
         {subtitle && (
           <span style={{ fontSize: 10, color: palette.inkSoft, fontWeight: 400 }}>{subtitle}</span>
         )}
@@ -4701,6 +4835,759 @@ function SyncConflictModal({ conflict, onKeepLocal, onKeepRemote, onCancel }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//   FOOD COST CHIP (visible globalement dans le header)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Affiche le food cost global de la période sélectionnée, avec un code couleur
+// (sage < 30 % < amber < 35 % < wine) cohérent avec les seuils utilisés
+// partout ailleurs dans l'app (cf. StatusPill). Le but : que le FC, métrique
+// reine en restauration, soit visible quelle que soit la vue ouverte.
+
+function FoodCostChip({ ratio, compact = false }) {
+  if (ratio == null) return null;
+  const color = ratio < 0.30 ? palette.sage : ratio < 0.35 ? palette.amber : palette.wine;
+  return (
+    <div
+      title={`Food cost sur la période sélectionnée — ${formatPercent(ratio)}`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: compact ? '4px 8px' : '6px 10px',
+        borderRadius: 6,
+        background: color + '12',
+        border: `1px solid ${color}40`,
+        fontFamily: 'DM Sans, sans-serif',
+      }}
+    >
+      <span style={{
+        fontSize: 9,
+        color: palette.inkSoft,
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: 0.6,
+      }}>
+        FC
+      </span>
+      <span style={{
+        fontFamily: 'Fraunces, serif',
+        fontWeight: 700,
+        fontSize: compact ? 13 : 14,
+        color,
+        lineHeight: 1,
+      }}>
+        {formatPercent(ratio)}
+      </span>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   COMMAND PALETTE (Cmd/Ctrl + K)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Lanceur de recherche/navigation rapide. Ouvre une modale centrée avec un
+// champ de recherche unique qui combine :
+//   · Navigation entre les onglets (toujours présent au sommet, même vide)
+//   · Articles du catalogue (filtrés par requête)
+//   · Recettes (filtrées par requête)
+//
+// Navigation clavier complète : flèches pour parcourir, Entrée pour valider,
+// Esc pour fermer. Cliquer en dehors ferme aussi.
+
+function CommandPalette({ isOpen, onClose, articles, recipes, setActiveTab }) {
+  const [query, setQuery] = useState('');
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const inputRef = useRef(null);
+
+  // Reset state & focus input on open
+  useEffect(() => {
+    if (isOpen) {
+      setQuery('');
+      setSelectedIdx(0);
+      // RAF + timeout : laisse React peindre la modale avant de focus
+      setTimeout(() => { try { inputRef.current?.focus(); } catch (_) {} }, 50);
+    }
+  }, [isOpen]);
+
+  const items = useMemo(() => {
+    const navActions = [
+      { type: 'action', id: 'nav-dashboard', label: 'Tableau de bord',     hint: 'KPIs & food cost',         target: 'dashboard'  },
+      { type: 'action', id: 'nav-articles',  label: 'Catalogue',           hint: 'Articles & variantes',     target: 'articles'   },
+      { type: 'action', id: 'nav-recipes',   label: 'Recettes',            hint: 'Plats & coûts',             target: 'recipes'    },
+      { type: 'action', id: 'nav-purchases', label: 'Achats & Factures',   hint: 'Saisir / scanner',          target: 'purchases'  },
+      { type: 'action', id: 'nav-stocks',    label: 'Stocks',              hint: 'Inventaire & rotations',    target: 'stocks'     },
+      { type: 'action', id: 'nav-alerts',    label: 'Alertes',             hint: 'Stocks bas, hausses',       target: 'alerts'     },
+      { type: 'action', id: 'nav-equipment', label: 'Équipement',          hint: 'Vaisselle & matériel',      target: 'equipment'  },
+      { type: 'action', id: 'nav-energy',    label: 'Énergie',             hint: 'Factures EDF, gaz, eau',    target: 'energy'     },
+      { type: 'action', id: 'nav-report',    label: 'Rapport',             hint: 'Vue synthétique',           target: 'report'     },
+      { type: 'action', id: 'nav-sales',     label: 'Ventes CLYO',         hint: 'Import des ventes',         target: 'sales'      },
+      { type: 'action', id: 'nav-analytics', label: 'Analyses',            hint: 'Tendances temporelles',     target: 'analytics'  },
+      { type: 'action', id: 'nav-simulator', label: 'Simulateur',          hint: 'Comparer des variantes',    target: 'simulator'  },
+    ];
+
+    const q = stripAccents((query || '').trim().toLowerCase());
+
+    // Query vide : on montre uniquement les actions de navigation principales.
+    if (!q) return navActions.slice(0, 8);
+
+    const matches = (text) => stripAccents(String(text || '').toLowerCase()).includes(q);
+
+    const matchingActions = navActions.filter((a) => matches(a.label) || matches(a.hint));
+    const matchingArticles = (articles || [])
+      .filter((a) => matches(a.name))
+      .slice(0, 6)
+      .map((a) => ({
+        type: 'article',
+        id: 'art-' + a.id,
+        label: a.name,
+        hint: a.category || 'Article',
+        target: 'articles',
+      }));
+    const matchingRecipes = (recipes || [])
+      .filter((r) => matches(r.name))
+      .slice(0, 6)
+      .map((r) => ({
+        type: 'recipe',
+        id: 'rec-' + r.id,
+        label: r.name,
+        hint: 'Recette',
+        target: 'recipes',
+      }));
+
+    return [...matchingActions, ...matchingArticles, ...matchingRecipes];
+  }, [query, articles, recipes]);
+
+  // Keep selectedIdx in bounds when items shrink
+  useEffect(() => {
+    if (selectedIdx >= items.length) setSelectedIdx(Math.max(0, items.length - 1));
+  }, [items.length, selectedIdx]);
+
+  const selectItem = useCallback((item) => {
+    if (!item) return;
+    if (item.target) setActiveTab(item.target);
+    onClose();
+  }, [setActiveTab, onClose]);
+
+  // Keyboard navigation (only while palette is open)
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIdx((i) => Math.min(i + 1, Math.max(0, items.length - 1)));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIdx((i) => Math.max(0, i - 1));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        selectItem(items[selectedIdx]);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, items, selectedIdx, selectItem, onClose]);
+
+  if (!isOpen) return null;
+
+  const typeLabel = (type) => type === 'action' ? 'Aller à' : type === 'article' ? 'Article' : 'Recette';
+
+  return (
+    <div
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Recherche rapide"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(15, 12, 9, 0.45)',
+        zIndex: 10000,
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        paddingTop: 'max(72px, 10vh)',
+        paddingLeft: 16,
+        paddingRight: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: palette.cream,
+          borderRadius: 12,
+          width: 'min(640px, 100%)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
+          overflow: 'hidden',
+          fontFamily: 'DM Sans, sans-serif',
+          border: `1px solid ${palette.rule}`,
+        }}
+      >
+        {/* Search input */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '14px 18px',
+          borderBottom: `1px solid ${palette.rule}`,
+        }}>
+          <Search size={16} style={{ color: palette.inkSoft, flexShrink: 0 }} />
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="Rechercher un article, une recette, un onglet…"
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setSelectedIdx(0); }}
+            style={{
+              flex: 1,
+              border: 'none',
+              outline: 'none',
+              background: 'transparent',
+              fontSize: 16,
+              fontFamily: 'DM Sans, sans-serif',
+              color: palette.ink,
+            }}
+          />
+        </div>
+
+        {/* Results list */}
+        <div style={{ maxHeight: 380, overflowY: 'auto', padding: 6 }}>
+          {items.length === 0 ? (
+            <div style={{ padding: 28, textAlign: 'center', color: palette.inkSoft, fontSize: 13 }}>
+              Aucun résultat pour « {query} »
+            </div>
+          ) : (
+            items.map((item, idx) => {
+              const isSelected = selectedIdx === idx;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => selectItem(item)}
+                  onMouseEnter={() => setSelectedIdx(idx)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 6,
+                    border: 'none',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    background: isSelected ? palette.paper : 'transparent',
+                    color: palette.ink,
+                    fontFamily: 'inherit',
+                    fontSize: 14,
+                    marginBottom: 2,
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.6,
+                      color: palette.inkSoft,
+                      background: palette.rule,
+                      padding: '2px 6px',
+                      borderRadius: 3,
+                      minWidth: 56,
+                      textAlign: 'center',
+                      flexShrink: 0,
+                    }}>
+                      {typeLabel(item.type)}
+                    </span>
+                    <span style={{
+                      fontWeight: isSelected ? 600 : 500,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}>
+                      {item.label}
+                    </span>
+                  </span>
+                  {item.hint && (
+                    <span style={{
+                      fontSize: 11,
+                      color: palette.inkSoft,
+                      marginLeft: 12,
+                      flexShrink: 0,
+                    }}>
+                      {item.hint}
+                    </span>
+                  )}
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        {/* Footer keyboard hints */}
+        <div style={{
+          padding: '8px 18px',
+          borderTop: `1px solid ${palette.rule}`,
+          fontSize: 11,
+          color: palette.inkSoft,
+          display: 'flex',
+          gap: 16,
+          background: palette.paper + '60',
+        }}>
+          <span>↑↓ naviguer</span>
+          <span>⏎ valider</span>
+          <span>Esc fermer</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   SIDEBAR (navigation principale)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Sidebar gauche structurée en sections, rétractable sur desktop et drawer
+// overlay sur mobile. Trois zones :
+//   · Brand (titre)
+//   · Sections : home (Tableau de bord seul), Quotidien, Pilotage
+//   · Footer : bouton replier/déplier (desktop), version (info)
+//
+// Sur mobile (`isMobile`), la sidebar devient un drawer en position fixed,
+// caché par défaut et révélé par le bouton hamburger du TopBar. Un backdrop
+// semi-transparent permet de fermer en cliquant en dehors.
+
+const SIDEBAR_SECTIONS = [
+  { id: 'home',      label: null,         items: ['dashboard'] },
+  { id: 'quotidien', label: 'Quotidien',  items: ['articles', 'recipes', 'purchases', 'stocks', 'alerts', 'sales', 'energy', 'equipment'] },
+  { id: 'pilotage',  label: 'Pilotage',   items: ['report', 'analytics', 'simulator', 'settings'] },
+];
+
+function Sidebar({
+  tabs,
+  activeTab,
+  setActiveTab,
+  alertsIndex,
+  collapsed,
+  onToggleCollapsed,
+  isMobile,
+  mobileOpen,
+  onMobileClose,
+}) {
+  // Width when expanded vs collapsed (icon-only) on desktop.
+  // On mobile we use full expanded width regardless of `collapsed`.
+  const expandedW = 232;
+  const collapsedW = 64;
+  const effectiveCollapsed = isMobile ? false : collapsed;
+  const width = effectiveCollapsed ? collapsedW : expandedW;
+
+  // Lookup map for tab metadata by id
+  const tabById = useMemo(() => {
+    const map = {};
+    for (const t of tabs) map[t.id] = t;
+    return map;
+  }, [tabs]);
+
+  // ─── Tooltip au survol ───────────────────────────────────────────────────
+  // Affiché uniquement quand la sidebar est repliée (icônes seules), pour
+  // indiquer le libellé de l'onglet survolé. Inutile quand la sidebar est
+  // dépliée puisque les libellés sont déjà visibles. Inutile sur mobile aussi
+  // (pas de hover sur écran tactile).
+  // Rendu avec `position: fixed` pour ne pas être clippé par overflowX de l'aside.
+  const [tooltip, setTooltip] = useState(null);
+  const tooltipTimerRef = useRef(null);
+
+  const showTooltipFor = useCallback((label, rect) => {
+    if (isMobile || !effectiveCollapsed) return;
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+    // Petit délai pour ne pas spammer au passage rapide du curseur
+    tooltipTimerRef.current = setTimeout(() => {
+      setTooltip({
+        x: rect.right + 12,
+        y: rect.top + rect.height / 2,
+        label,
+      });
+    }, 300);
+  }, [isMobile, effectiveCollapsed]);
+
+  const hideTooltip = useCallback(() => {
+    if (tooltipTimerRef.current) {
+      clearTimeout(tooltipTimerRef.current);
+      tooltipTimerRef.current = null;
+    }
+    setTooltip(null);
+  }, []);
+
+  // Nettoyage du timer au démontage
+  useEffect(() => {
+    return () => { if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current); };
+  }, []);
+
+  // Si on déplie pendant qu'un tooltip est affiché, le cacher immédiatement
+  useEffect(() => {
+    if (!effectiveCollapsed) hideTooltip();
+  }, [effectiveCollapsed, hideTooltip]);
+
+  // ─── Item de menu ─────────────────────────────────────────────────────────
+  const SidebarItem = ({ id, label, icon: Icon, locked }) => {
+    const isActive = activeTab === id;
+    const showAlertBadge = id === 'alerts' && alertsIndex.length > 0;
+    return (
+      <button
+        onClick={() => {
+          setActiveTab(id);
+          hideTooltip();
+          if (isMobile) onMobileClose();
+        }}
+        aria-label={label}
+        aria-current={isActive ? 'page' : undefined}
+        style={{
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          width: '100%',
+          padding: effectiveCollapsed ? '10px 0' : '9px 12px',
+          justifyContent: effectiveCollapsed ? 'center' : 'flex-start',
+          borderRadius: 6,
+          border: 'none',
+          fontSize: 13.5,
+          fontWeight: isActive ? 600 : 500,
+          cursor: 'pointer',
+          fontFamily: 'DM Sans, sans-serif',
+          background: isActive ? palette.wine + '12' : 'transparent',
+          color: isActive ? palette.wine : palette.inkSoft,
+          opacity: locked && !isActive ? 0.55 : 1,
+          textAlign: 'left',
+          transition: 'background 120ms ease, color 120ms ease',
+        }}
+        onMouseEnter={(e) => {
+          if (!isActive) e.currentTarget.style.background = palette.paper;
+          const rect = e.currentTarget.getBoundingClientRect();
+          showTooltipFor(label, rect);
+        }}
+        onMouseLeave={(e) => {
+          if (!isActive) e.currentTarget.style.background = 'transparent';
+          hideTooltip();
+        }}
+      >
+        {/* Barre wine à gauche quand actif (l'équivalent vertical du soulignement) */}
+        {isActive && (
+          <span
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 6,
+              bottom: 6,
+              width: 3,
+              background: palette.wine,
+              borderRadius: 2,
+            }}
+          />
+        )}
+
+        <Icon size={17} style={{ flexShrink: 0 }} />
+
+        {!effectiveCollapsed && (
+          <span style={{
+            flex: 1,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}>
+            {label}
+          </span>
+        )}
+
+        {/* Badge alertes : pleine version quand déplié, point quand replié */}
+        {showAlertBadge && !effectiveCollapsed && (
+          <span style={{
+            background: palette.wine,
+            color: palette.cream,
+            fontSize: 11,
+            fontWeight: 700,
+            padding: '1px 7px',
+            borderRadius: 10,
+            minWidth: 18,
+            textAlign: 'center',
+            fontFamily: 'DM Sans, sans-serif',
+            flexShrink: 0,
+          }}>
+            {alertsIndex.length}
+          </span>
+        )}
+        {showAlertBadge && effectiveCollapsed && (
+          <span aria-hidden="true" style={{
+            position: 'absolute',
+            top: 4,
+            right: 8,
+            width: 7,
+            height: 7,
+            borderRadius: '50%',
+            background: palette.wine,
+          }} />
+        )}
+
+        {/* Lock pour les onglets phase-1 */}
+        {locked && !effectiveCollapsed && (
+          <Lock size={11} style={{ color: palette.inkSoft, opacity: 0.7, flexShrink: 0 }} />
+        )}
+      </button>
+    );
+  };
+
+  // ─── Conteneur principal ──────────────────────────────────────────────────
+  const aside = (
+    <aside
+      style={{
+        width,
+        // Sur mobile en drawer : fixed + overlay. Sur desktop : sticky.
+        position: isMobile ? 'fixed' : 'sticky',
+        top: 0,
+        left: 0,
+        height: '100vh',
+        background: palette.cream,
+        borderRight: `1px solid ${palette.rule}`,
+        display: 'flex',
+        flexDirection: 'column',
+        flexShrink: 0,
+        transition: 'width 180ms ease, transform 220ms ease',
+        zIndex: isMobile ? 1001 : 5,
+        transform: isMobile && !mobileOpen ? 'translateX(-100%)' : 'translateX(0)',
+        boxShadow: isMobile && mobileOpen ? '0 8px 32px rgba(0,0,0,0.15)' : 'none',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+      }}
+    >
+      {/* Brand zone */}
+      <div style={{
+        padding: effectiveCollapsed ? '16px 8px' : '20px 16px 16px',
+        borderBottom: `1px solid ${palette.rule}`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: effectiveCollapsed ? 'center' : 'space-between',
+        gap: 8,
+        minHeight: 64,
+        flexShrink: 0,
+      }}>
+        {effectiveCollapsed ? (
+          // Logo compact : T dans un carré wine
+          <div style={{
+            width: 36, height: 36,
+            background: palette.wine,
+            borderRadius: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: palette.cream,
+            fontFamily: 'Fraunces, serif',
+            fontWeight: 700,
+            fontSize: 22,
+          }}>
+            T
+          </div>
+        ) : (
+          <>
+            <h1
+              className="mc-display"
+              style={{
+                fontSize: 22,
+                fontWeight: 700,
+                color: palette.wine,
+                margin: 0,
+                lineHeight: 1.1,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              La Tambouille
+            </h1>
+            {isMobile && (
+              <button
+                onClick={onMobileClose}
+                aria-label="Fermer le menu"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: palette.inkSoft,
+                  padding: 4,
+                  borderRadius: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <X size={18} />
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Sections */}
+      <nav style={{
+        flex: 1,
+        padding: effectiveCollapsed ? '12px 6px' : '16px 10px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: effectiveCollapsed ? 4 : 6,
+      }}>
+        {SIDEBAR_SECTIONS.map((section, sectionIdx) => (
+          <div key={section.id} style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            marginTop: sectionIdx > 0 ? 12 : 0,
+          }}>
+            {/* Section label (caché quand replié) */}
+            {section.label && !effectiveCollapsed && (
+              <div style={{
+                padding: '6px 12px 4px',
+                fontSize: 10,
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: 0.8,
+                color: palette.inkSoft,
+                opacity: 0.7,
+              }}>
+                {section.label}
+              </div>
+            )}
+            {/* Separator quand replié (sauf première section) */}
+            {section.label && effectiveCollapsed && sectionIdx > 0 && (
+              <div style={{
+                height: 1,
+                background: palette.rule,
+                margin: '6px 12px 6px',
+              }} />
+            )}
+            {section.items
+              .map((id) => tabById[id])
+              .filter(Boolean)
+              .map((tab) => (
+                <SidebarItem
+                  key={tab.id}
+                  id={tab.id}
+                  label={tab.label}
+                  icon={tab.icon}
+                  locked={tab.locked}
+                />
+              ))}
+          </div>
+        ))}
+      </nav>
+
+      {/* Footer : bouton replier/déplier (desktop uniquement) */}
+      {!isMobile && (
+        <div style={{
+          padding: effectiveCollapsed ? '8px 6px' : '8px 10px',
+          borderTop: `1px solid ${palette.rule}`,
+          display: 'flex',
+          justifyContent: effectiveCollapsed ? 'center' : 'flex-end',
+          flexShrink: 0,
+        }}>
+          <button
+            onClick={onToggleCollapsed}
+            title={effectiveCollapsed ? 'Déplier la barre' : 'Replier la barre'}
+            aria-label={effectiveCollapsed ? 'Déplier la barre' : 'Replier la barre'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 8,
+              borderRadius: 6,
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              color: palette.inkSoft,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = palette.paper; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            {effectiveCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+        </div>
+      )}
+    </aside>
+  );
+
+  // ─── Élément tooltip (label uniquement, quand sidebar repliée) ───────────
+  // `position: fixed` pour ne pas être clippé par overflowX de l'aside,
+  // `pointerEvents: none` pour ne pas interférer avec le hover du bouton.
+  const tooltipNode = tooltip && !isMobile && effectiveCollapsed ? (
+    <div
+      role="tooltip"
+      style={{
+        position: 'fixed',
+        left: tooltip.x,
+        top: tooltip.y,
+        transform: 'translateY(-50%)',
+        background: palette.ink,
+        color: palette.cream,
+        padding: '6px 10px',
+        borderRadius: 5,
+        fontSize: 12.5,
+        fontWeight: 500,
+        whiteSpace: 'nowrap',
+        zIndex: 9998,
+        pointerEvents: 'none',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.22)',
+        fontFamily: 'DM Sans, sans-serif',
+        lineHeight: 1.3,
+        animation: 'mc-tooltip-fade-in 140ms ease-out',
+      }}
+    >
+      {/* Petite flèche orientée vers la gauche, vers l'item de la sidebar */}
+      <span
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: -4,
+          top: '50%',
+          transform: 'translateY(-50%) rotate(45deg)',
+          width: 8,
+          height: 8,
+          background: palette.ink,
+        }}
+      />
+      {tooltip.label}
+    </div>
+  ) : null;
+
+  // En mobile, on enveloppe avec un backdrop (overlay sombre cliquable)
+  if (isMobile) {
+    return (
+      <>
+        {mobileOpen && (
+          <div
+            onClick={onMobileClose}
+            aria-hidden="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(15, 12, 9, 0.45)',
+              zIndex: 1000,
+            }}
+          />
+        )}
+        {aside}
+        {tooltipNode}
+      </>
+    );
+  }
+  return (
+    <>
+      {aside}
+      {tooltipNode}
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 //   MAIN APP
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -4722,8 +5609,22 @@ export default function LaTambouille() {
   const [alertSettings, setAlertSettings] = useState({
     supplierGapThresholdPct: SUPPLIER_GAP_THRESHOLD_PCT_DEFAULT,
   });
+  // Réglages utilisateur : catégories personnalisées + seuils paramétrables.
+  // Initialisés aux défauts ; remplacés au boot s'il existe une version
+  // sauvegardée dans le storage.
+  const [userSettings, setUserSettings] = useState(() => mergeUserSettings(null));
   const [isReady, setIsReady] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
+  // Cmd/Ctrl + K command palette
+  const [cmdKOpen, setCmdKOpen] = useState(false);
+  // Sidebar state
+  //  · `sidebarCollapsed` : replie la sidebar desktop en mode icônes seulement.
+  //    Persisté en localStorage pour rester d'une session à l'autre.
+  //  · `sidebarMobileOpen` : ouverture du drawer mobile (overlay). Éphémère.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+  // Responsive layout : on bascule en mode mobile sous 720 px de large
+  const isMobile = useIsMobile(720);
 
   const periodFilter = usePeriodFilter();
 
@@ -4788,6 +5689,9 @@ export default function LaTambouille() {
           setAssetMaintenance(loadedAssetMaintenance);
           setAssetInterventions(loadedAssetInterventions);
           if (loadedAlertSettings) setAlertSettings(loadedAlertSettings);
+          // Chargement des réglages utilisateur (avec fallback sur défauts)
+          const loadedUserSettings = await storageGet(STORAGE_KEYS.userSettings, null);
+          setUserSettings(mergeUserSettings(loadedUserSettings));
         } else {
           console.log('[BOOT] first launch, seeding demo data');
           const seedArticles = migrateArticlesForStock(DEMO_ARTICLES);
@@ -4829,6 +5733,25 @@ export default function LaTambouille() {
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.assetMaintenance, assetMaintenance); }, [assetMaintenance, isReady]);
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.assetInterventions, assetInterventions); }, [assetInterventions, isReady]);
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.alertSettings, alertSettings); }, [alertSettings, isReady]);
+  useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.sidebarCollapsed, sidebarCollapsed); }, [sidebarCollapsed, isReady]);
+  useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.userSettings, userSettings); }, [userSettings, isReady]);
+
+  // Charger la préférence sidebarCollapsed une fois prêt (silencieux si jamais
+  // sauvegardée — la valeur initiale `false` reste). Désactivé sur mobile car
+  // l'état effectif y est toujours « pas replié, juste caché ».
+  useEffect(() => {
+    if (!isReady) return;
+    (async () => {
+      const stored = await storageGet(STORAGE_KEYS.sidebarCollapsed, null);
+      if (typeof stored === 'boolean') setSidebarCollapsed(stored);
+    })();
+  }, [isReady]);
+
+  // Fermer le drawer mobile dès qu'on passe en desktop (résize), pour ne pas
+  // laisser un état orphelin si l'utilisateur tourne sa tablette ou redimensionne.
+  useEffect(() => {
+    if (!isMobile && sidebarMobileOpen) setSidebarMobileOpen(false);
+  }, [isMobile, sidebarMobileOpen]);
 
   // Trigger debounced Drive sync whenever data changes.
   // IMPORTANT: isReady is NOT in the dependency array — we don't want to push
@@ -4898,20 +5821,68 @@ export default function LaTambouille() {
   // will activate once CLYO sales are imported.
   const phase1Mode = sales.length === 0;
 
+  // ─── Food cost global (visible dans le header sur toutes les vues) ────────
+  // Calcule le ratio coût matière / chiffre d'affaires sur la période active.
+  // Renvoie null tant qu'il n'y a pas de ventes ou pas de revenu sur la période.
+  // C'est une légère duplication avec DashboardView (qui recalcule en interne),
+  // acceptable pour éviter un refactor plus large du context.
+  const globalFC = useMemo(() => {
+    if (sales.length === 0) return null;
+    const assortmentBase = findAssortmentBase(recipes);
+    const recipeCostMap = {};
+    for (const recipe of recipes) {
+      recipeCostMap[recipe.id] = indexedPlateCost(recipe, priceIndex, assortmentBase).plateCost;
+    }
+    const dateFrom = periodFilter.dateFrom;
+    const dateTo = periodFilter.dateTo;
+    let totalRevenue = 0;
+    let totalCost = 0;
+    for (const s of sales) {
+      if (dateFrom && s.date < dateFrom) continue;
+      if (dateTo && s.date > dateTo) continue;
+      totalRevenue += (s.revenue || 0);
+      totalCost += (recipeCostMap[s.recipeId] || 0) * (s.qty || 0);
+    }
+    return totalRevenue > 0 ? totalCost / totalRevenue : null;
+  }, [sales, recipes, priceIndex, periodFilter.dateFrom, periodFilter.dateTo]);
+
+  // ─── Cmd/Ctrl + K : ouverture du command palette ─────────────────────────
+  // Listener global, mais on ne déclenche pas quand l'utilisateur est déjà en
+  // train de taper dans un champ (sauf si c'est un input du palette lui-même,
+  // mais celui-ci est démontable donc pas un souci).
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCmdKOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Liste des onglets. Les sections de la sidebar (cf. SIDEBAR_SECTIONS plus
+  // haut) organisent visuellement la nav en groupes Quotidien / Pilotage.
   const tabs = [
-    { id: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard, locked: phase1Mode },
-    { id: 'articles', label: 'Catalogue', icon: Package },
-    { id: 'recipes', label: 'Recettes', icon: FileText },
-    { id: 'purchases', label: 'Achats & Factures', icon: ShoppingCart },
-    { id: 'stocks', label: 'Stocks', icon: Box },
-    { id: 'equipment', label: 'Équipement', icon: Wrench },
-    { id: 'energy', label: 'Énergie', icon: Zap },
-    { id: 'alerts', label: 'Alertes', icon: AlertCircle },
-    { id: 'report', label: 'Rapport', icon: ClipboardList },
-    { id: 'sales', label: 'Ventes CLYO', icon: Upload, locked: phase1Mode },
-    { id: 'analytics', label: 'Analyses', icon: TrendingUp, locked: phase1Mode },
-    { id: 'simulator', label: 'Simulateur', icon: Star },
+    { id: 'dashboard',  label: 'Tableau de bord',   icon: LayoutDashboard, locked: phase1Mode },
+    { id: 'articles',   label: 'Catalogue',         icon: Package           },
+    { id: 'recipes',    label: 'Recettes',          icon: FileText          },
+    { id: 'purchases',  label: 'Achats & Factures', icon: ShoppingCart      },
+    { id: 'stocks',     label: 'Stocks',            icon: Box               },
+    { id: 'alerts',     label: 'Alertes',           icon: AlertCircle       },
+    { id: 'equipment',  label: 'Équipement',        icon: Wrench            },
+    { id: 'energy',     label: 'Énergie',           icon: Zap               },
+    { id: 'report',     label: 'Rapport',           icon: ClipboardList     },
+    { id: 'sales',      label: 'Ventes CLYO',       icon: Upload,           locked: phase1Mode },
+    { id: 'analytics',  label: 'Analyses',          icon: TrendingUp,       locked: phase1Mode },
+    { id: 'simulator',  label: 'Simulateur',        icon: Star              },
+    { id: 'settings',   label: 'Réglages',          icon: Settings          },
   ];
+
+  // Onglets où le PeriodSelector et le FoodCostChip sont sans objet
+  // (vues d'état présent ou d'import, pas de notion de période).
+  const PERIODLESS_TABS = new Set(['stocks', 'alerts', 'sales', 'settings']);
+  const showPeriodControls = !PERIODLESS_TABS.has(activeTab);
 
   if (!isReady) {
     return (
@@ -4937,6 +5908,14 @@ export default function LaTambouille() {
     assetMaintenance, setAssetMaintenance,
     assetInterventions, setAssetInterventions,
     alertSettings, setAlertSettings,
+    // Réglages utilisateur : exposés comme objets, et raccourcis dérivés vers
+    // les listes pour éviter les usages `context.userSettings.xxx` verbeux
+    // dans les vues qui n'ont besoin que des catégories.
+    userSettings, setUserSettings,
+    articleCategories: userSettings.articleCategories,
+    equipmentCategories: userSettings.equipmentCategories,
+    assetCategories: userSettings.assetCategories,
+    thresholds: userSettings.thresholds,
     priceIndex,
     allTimePriceIndex,
     outflowIndex,
@@ -4948,92 +5927,152 @@ export default function LaTambouille() {
     <div className="mc-app">
       <style>{globalStyles}</style>
       <ToastContainer />
-      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '32px 24px' }}>
-        <header
-          style={{
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'space-between',
-            borderBottom: `1px solid ${palette.rule}`,
-            paddingBottom: 24,
-            marginBottom: 32,
-          }}
-        >
-          <div>
-            <h1 className="mc-display" style={{ fontSize: 40, fontWeight: 700, color: palette.wine, margin: 0, lineHeight: 1 }}>
-              La Tambouille
-            </h1>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: palette.inkSoft }}>
-              Articles · Variantes · Prix moyens pondérés · Simulations
-            </p>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
-            <SyncStatusIndicator syncState={driveSync} onClick={() => setShowSyncModal(true)} />
-            <PeriodSelector
-              period={periodFilter.period}
-              setPeriod={periodFilter.setPeriod}
-              customFrom={periodFilter.customFrom}
-              setCustomFrom={periodFilter.setCustomFrom}
-              customTo={periodFilter.customTo}
-              setCustomTo={periodFilter.setCustomTo}
-            />
-          </div>
-        </header>
+      {/* Layout principal : sidebar gauche + main droite.
+          Sur mobile, la sidebar devient un drawer overlay et `main` prend toute
+          la largeur. Sur desktop, la sidebar est sticky + rétractable. */}
+      <div style={{
+        display: 'flex',
+        minHeight: '100vh',
+      }}>
+        <Sidebar
+          tabs={tabs}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          alertsIndex={alertsIndex}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+          isMobile={isMobile}
+          mobileOpen={sidebarMobileOpen}
+          onMobileClose={() => setSidebarMobileOpen(false)}
+        />
 
-        <nav style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 32 }}>
-          {tabs.map(({ id, label, icon: Icon, locked }) => {
-            const isActive = activeTab === id;
-            // Badge with count for the Alertes tab — shown only when there are alerts
-            const showAlertBadge = id === 'alerts' && alertsIndex.length > 0;
-            return (
-              <button
-                key={id}
-                onClick={() => setActiveTab(id)}
+        <main style={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+        }}>
+          {/* TopBar sticky : hamburger (mobile) + titre de l'onglet + actions
+              transverses (sync, recherche, food cost, période).
+              Volontairement plat (pas de border-top), juste un border-bottom
+              pour ancrer l'œil. */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: isMobile ? '10px 14px' : '16px 28px',
+            borderBottom: `1px solid ${palette.rule}`,
+            background: palette.cream,
+            position: 'sticky',
+            top: 0,
+            zIndex: 4,
+            flexWrap: 'wrap',
+          }}>
+            {/* Zone gauche : hamburger + titre de la vue courante */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              {isMobile && (
+                <button
+                  onClick={() => setSidebarMobileOpen(true)}
+                  aria-label="Ouvrir le menu"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    padding: 6,
+                    borderRadius: 5,
+                    cursor: 'pointer',
+                    color: palette.ink,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Menu size={22} />
+                </button>
+              )}
+              <h2
+                className="mc-display"
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '10px 16px',
-                  borderRadius: 6,
-                  fontSize: 14,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  border: 'none',
-                  fontFamily: 'DM Sans, sans-serif',
-                  background: isActive ? palette.paper : 'transparent',
-                  color: isActive ? palette.ink : palette.inkSoft,
-                  opacity: locked && !isActive ? 0.5 : 1,
+                  margin: 0,
+                  fontSize: isMobile ? 18 : 22,
+                  fontWeight: 600,
+                  color: palette.ink,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  lineHeight: 1.2,
                 }}
               >
-                <Icon size={16} />
-                {label}
-                {locked && (
-                  <span
-                    title="Activé après import des ventes"
-                    style={{ fontSize: 10, color: palette.inkSoft, marginLeft: 2 }}
-                  >🔒</span>
-                )}
-                {showAlertBadge && (
-                  <span
-                    style={{
-                      background: palette.wine,
-                      color: palette.cream,
-                      fontSize: 11,
-                      fontWeight: 700,
-                      padding: '1px 7px',
-                      borderRadius: 10,
-                      minWidth: 18,
-                      textAlign: 'center',
-                      fontFamily: 'DM Sans, sans-serif',
-                    }}
-                  >
-                    {alertsIndex.length}
+                {(tabs.find((t) => t.id === activeTab) || {}).label || ''}
+              </h2>
+            </div>
+
+            {/* Zone droite : sync + recherche + FC chip + sélecteur de période */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
+            }}>
+              <SyncStatusIndicator syncState={driveSync} onClick={() => setShowSyncModal(true)} />
+              <button
+                onClick={() => setCmdKOpen(true)}
+                title="Recherche rapide (Ctrl/Cmd + K)"
+                aria-label="Ouvrir la recherche rapide"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${palette.rule}`,
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  fontFamily: 'DM Sans, sans-serif',
+                  fontSize: 12,
+                  color: palette.inkSoft,
+                }}
+              >
+                <Search size={14} />
+                {!isMobile && <span>Rechercher</span>}
+                {!isMobile && (
+                  <span style={{
+                    marginLeft: 6,
+                    padding: '1px 5px',
+                    background: palette.rule,
+                    borderRadius: 3,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: palette.inkSoft,
+                  }}>
+                    ⌘K
                   </span>
                 )}
               </button>
-            );
-          })}
-        </nav>
+              {showPeriodControls && <FoodCostChip ratio={globalFC} compact={isMobile} />}
+              {showPeriodControls && (
+                <PeriodSelector
+                  period={periodFilter.period}
+                  setPeriod={periodFilter.setPeriod}
+                  customFrom={periodFilter.customFrom}
+                  setCustomFrom={periodFilter.setCustomFrom}
+                  customTo={periodFilter.customTo}
+                  setCustomTo={periodFilter.setCustomTo}
+                />
+              )}
+            </div>
+          </div>
+
+          {/* Contenu : padding et largeur max raisonnable pour la lisibilité */}
+          <div style={{
+            flex: 1,
+            padding: isMobile ? '16px 14px' : '28px 32px',
+            maxWidth: 1400,
+            width: '100%',
+            margin: '0 auto',
+            boxSizing: 'border-box',
+          }}>
 
         <ErrorBoundary>
           {activeTab === 'dashboard' && (
@@ -5057,8 +6096,11 @@ export default function LaTambouille() {
               : <AnalyticsView context={context} />
           )}
           {activeTab === 'simulator' && <SimulatorView context={context} />}
+          {activeTab === 'settings' && <SettingsView context={context} />}
         </ErrorBoundary>
-      </div>
+          </div>{/* close padding div */}
+        </main>
+      </div>{/* close flex layout */}
 
       {showSyncModal && (
         <SyncSettingsModal syncState={driveSync} onClose={() => setShowSyncModal(false)} onExportBackup={() => exportFullBackup(context)} />
@@ -5072,6 +6114,16 @@ export default function LaTambouille() {
           onCancel={driveSync.cancelConflict}
         />
       )}
+
+      {/* Command palette : ouvre avec Cmd/Ctrl+K ou le bouton « Rechercher »
+          dans le header. Permet de naviguer entre onglets, articles, recettes. */}
+      <CommandPalette
+        isOpen={cmdKOpen}
+        onClose={() => setCmdKOpen(false)}
+        articles={articles}
+        recipes={recipes}
+        setActiveTab={setActiveTab}
+      />
     </div>
   );
 }
@@ -5441,6 +6493,7 @@ function ArticlesView({ context }) {
     recipes, setRecipes,
     priceIndex, allTimePriceIndex,
     dateFrom, dateTo,
+    articleCategories,
   } = context;
 
   const [editingArticle, setEditingArticle] = useState(null);
@@ -5449,6 +6502,7 @@ function ArticlesView({ context }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [supplierFilter, setSupplierFilter] = useState('all');
   const [reclassifyCount, setReclassifyCount] = useState(null);
 
   // Reclassify all products that are still in "À trier" by running the label
@@ -5509,6 +6563,34 @@ function ArticlesView({ context }) {
     return sorted;
   }, [articles]);
 
+  // Map articleId → Set<supplier> dérivée des achats. Permet de filtrer la liste
+  // par fournisseur sans recalculer à chaque render. Un article peut avoir
+  // plusieurs fournisseurs si on l'a acheté chez plusieurs sources.
+  const articleSuppliers = useMemo(() => {
+    const map = new Map();
+    for (const p of purchases) {
+      const sup = (p.supplier || '').trim();
+      if (!sup) continue;
+      for (const item of (p.items || [])) {
+        if (!item.articleId) continue;
+        if (!map.has(item.articleId)) map.set(item.articleId, new Set());
+        map.get(item.articleId).add(sup);
+      }
+    }
+    return map;
+  }, [purchases]);
+
+  // Liste plate de tous les fournisseurs présents dans les achats (triée A→Z)
+  // pour peupler le dropdown de filtre.
+  const availableSuppliers = useMemo(() => {
+    const set = new Set();
+    for (const p of purchases) {
+      const sup = (p.supplier || '').trim();
+      if (sup) set.add(sup);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+  }, [purchases]);
+
   const filteredArticles = enrichedArticles.filter((article) => {
     const query = searchQuery.toLowerCase();
     const matchesQuery =
@@ -5531,7 +6613,13 @@ function ArticlesView({ context }) {
       matchesType = (article.type || 'food') === typeFilter;
     }
 
-    return matchesQuery && matchesCategory && matchesType;
+    let matchesSupplier = true;
+    if (supplierFilter !== 'all') {
+      const suppliers = articleSuppliers.get(article.id);
+      matchesSupplier = !!(suppliers && suppliers.has(supplierFilter));
+    }
+
+    return matchesQuery && matchesCategory && matchesType && matchesSupplier;
   });
 
   const handleSave = (data) => {
@@ -5648,7 +6736,21 @@ function ArticlesView({ context }) {
           <option value="food">Alimentaire</option>
           <option value="consumable">Consommable</option>
         </select>
-        {(searchQuery || categoryFilter !== 'all' || typeFilter !== 'all') && (
+        {availableSuppliers.length > 0 && (
+          <select
+            className="mc-input"
+            style={{ flex: '0 0 auto', minWidth: 180 }}
+            value={supplierFilter}
+            onChange={(e) => setSupplierFilter(e.target.value)}
+            title="Filtrer par fournisseur"
+          >
+            <option value="all">Tous fournisseurs</option>
+            {availableSuppliers.map((sup) => (
+              <option key={sup} value={sup}>{sup}</option>
+            ))}
+          </select>
+        )}
+        {(searchQuery || categoryFilter !== 'all' || typeFilter !== 'all' || supplierFilter !== 'all') && (
           <span style={{ fontSize: 12, color: palette.inkSoft, whiteSpace: 'nowrap' }}>
             {filteredArticles.length} sur {articles.length} affichés
           </span>
@@ -5809,6 +6911,7 @@ function ArticlesView({ context }) {
           initial={editingArticle}
           onSave={handleSave}
           onClose={() => setEditingArticle(null)}
+          categories={articleCategories}
         />
       )}
 
@@ -5840,7 +6943,10 @@ function ArticlesView({ context }) {
 
 // ─── Article editor modal ──────────────────────────────────────────────
 
-function ArticleModal({ initial, onSave, onClose }) {
+function ArticleModal({ initial, onSave, onClose, categories }) {
+  // Fallback sur la constante par défaut si jamais l'appelant n'a pas fourni
+  // la liste (rétrocompat avec d'éventuels usages futurs).
+  const articleCategories = categories || ARTICLE_CATEGORIES;
   const [form, setForm] = useState({
     name: initial.name || '',
     unit: initial.unit || 'kg',
@@ -5917,10 +7023,10 @@ function ArticleModal({ initial, onSave, onClose }) {
               value={form.category || 'À trier'}
               onChange={(e) => setForm({ ...form, category: e.target.value })}
             >
-              {ARTICLE_CATEGORIES.map((cat) => (
+              {articleCategories.map((cat) => (
                 <option key={cat} value={cat}>{cat}</option>
               ))}
-              {form.category && !ARTICLE_CATEGORIES.includes(form.category) && (
+              {form.category && !articleCategories.includes(form.category) && (
                 <option value={form.category}>{form.category}</option>
               )}
             </select>
@@ -13598,7 +14704,7 @@ function EquipmentView({ context }) {
 // sur les 12 derniers mois.
 
 function AssetsView({ context }) {
-  const { assets, setAssets, assetMaintenance, setAssetMaintenance, assetInterventions, setAssetInterventions } = context;
+  const { assets, setAssets, assetMaintenance, setAssetMaintenance, assetInterventions, setAssetInterventions, assetCategories } = context;
 
   const [activeSection, setActiveSection] = useState('inventory');
   const [editingAsset, setEditingAsset] = useState(null);
@@ -13775,7 +14881,7 @@ function AssetsView({ context }) {
               </div>
               {assetsWithCosts.map((a) => {
                 const status = ASSET_STATUSES.find((s) => s.id === a.status);
-                const category = ASSET_CATEGORIES.find((c) => c.id === a.categoryId);
+                const category = assetCategories.find((c) => c.id === a.categoryId);
                 return (
                   <div key={a.id} style={{
                     display: 'grid',
@@ -13992,7 +15098,7 @@ function AssetsView({ context }) {
 
       {/* ─── MODALES ─────────────────────────────────────────────────────── */}
       {editingAsset && (
-        <AssetEditor asset={editingAsset} onSave={saveAsset} onCancel={() => setEditingAsset(null)} />
+        <AssetEditor asset={editingAsset} onSave={saveAsset} onCancel={() => setEditingAsset(null)} categories={assetCategories} />
       )}
       {editingMaintenance && (
         <MaintenanceEditor m={editingMaintenance} assets={assets} onSave={saveMaintenance} onCancel={() => setEditingMaintenance(null)} />
@@ -14006,7 +15112,8 @@ function AssetsView({ context }) {
 
 // ─── Asset sub-modals ───────────────────────────────────────────────────────
 
-function AssetEditor({ asset, onSave, onCancel }) {
+function AssetEditor({ asset, onSave, onCancel, categories }) {
+  const assetCategories = categories || ASSET_CATEGORIES;
   const [draft, setDraft] = useState({ ...asset });
   const canSave = draft.name.trim().length > 0;
 
@@ -14025,7 +15132,7 @@ function AssetEditor({ asset, onSave, onCancel }) {
             <label>
               <div style={{ fontSize: 12, color: palette.inkSoft, marginBottom: 4 }}>Catégorie</div>
               <select value={draft.categoryId} onChange={(e) => setDraft({ ...draft, categoryId: e.target.value })} className="mc-input">
-                {ASSET_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                {assetCategories.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
               </select>
             </label>
             <label>
@@ -14198,6 +15305,7 @@ function SmallEquipmentView({ context }) {
     equipment, setEquipment,
     equipmentPurchases, setEquipmentPurchases,
     equipmentInventories, setEquipmentInventories,
+    equipmentCategories,
   } = context;
 
   const [editingArticle, setEditingArticle] = useState(null)
@@ -14205,6 +15313,10 @@ function SmallEquipmentView({ context }) {
   const [addingPurchase, setAddingPurchase] = useState(false);
   const [addingInventory, setAddingInventory] = useState(false);
   const [activeSection, setActiveSection] = useState('articles');
+  // Recherche et filtre catégorie pour la section articles
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [supplierFilter, setSupplierFilter] = useState('all');
 
   // ─── Computed views ────────────────────────────────────────────────────
   // Build a per-article snapshot of its last inventoried qty + cumulative
@@ -14229,6 +15341,11 @@ function SmallEquipmentView({ context }) {
       let totalSpent = 0;
       let totalUnits = 0;
       let totalValue = 0;
+      // Fournisseur(s) — on garde le plus récent + le nombre de fournisseurs
+      // distincts pour signaler si l'article tourne entre plusieurs sources.
+      let lastSupplier = null;
+      let lastSupplierDate = '';
+      const supplierSet = new Set();
       for (const p of equipmentPurchases) {
         for (const it of (p.items || [])) {
           if (it.equipmentId !== eq.id) continue;
@@ -14238,13 +15355,57 @@ function SmallEquipmentView({ context }) {
             boughtSince += (it.qty || 0);
             totalSpent += (it.total || 0);
           }
+          const sup = (p.supplier || '').trim();
+          if (sup) {
+            supplierSet.add(sup);
+            if ((p.date || '') >= lastSupplierDate) {
+              lastSupplier = sup;
+              lastSupplierDate = p.date || '';
+            }
+          }
         }
       }
+      const supplierCount = supplierSet.size;
       const avgUnitPrice = totalUnits > 0 ? totalValue / totalUnits : (eq.estimatedUnitPrice || null);
+      // Le prix est purement estimé seulement si on n'a aucun achat enregistré.
+      // (Subtilité : à l'import d'une facture, estimatedUnitPrice est auto-rempli
+      //  à partir du prix d'achat, donc on ne peut pas se fier à `avgUnitPrice ===
+      //  estimatedUnitPrice` pour détecter une « estimation pure ».)
+      const priceIsEstimated = totalUnits === 0 && eq.estimatedUnitPrice != null;
       const estimatedCurrent = lastInv ? lastInv.qty + boughtSince : null;
-      return { ...eq, lastInv, boughtSince, estimatedCurrent, totalSpent, avgUnitPrice };
+      return { ...eq, lastInv, boughtSince, estimatedCurrent, totalSpent, avgUnitPrice, priceIsEstimated, lastSupplier, supplierCount, suppliers: supplierSet };
     });
   }, [equipment, equipmentPurchases, equipmentInventories]);
+
+  // Liste plate des fournisseurs d'équipement présents dans les achats (triée).
+  const availableSuppliers = useMemo(() => {
+    const set = new Set();
+    for (const p of equipmentPurchases) {
+      const sup = (p.supplier || '').trim();
+      if (sup) set.add(sup);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+  }, [equipmentPurchases]);
+
+  // Articles filtrés par recherche (nom + alias), catégorie et fournisseur.
+  // Calcul mémoïsé pour éviter un re-filter à chaque render. Aligné sur le
+  // pattern utilisé dans ArticlesView pour rester cohérent côté UX.
+  const filteredArticles = useMemo(() => {
+    const q = normalizeText(searchQuery);
+    return articlesWithStock.filter((a) => {
+      // Catégorie
+      if (categoryFilter !== 'all' && a.categoryId !== categoryFilter) return false;
+      // Fournisseur : vérifie que l'article a été acheté chez ce fournisseur
+      if (supplierFilter !== 'all') {
+        if (!a.suppliers || !a.suppliers.has(supplierFilter)) return false;
+      }
+      // Recherche : nom + alias
+      if (!q) return true;
+      if (normalizeText(a.name || '').includes(q)) return true;
+      if ((a.aliases || []).some((al) => normalizeText(al).includes(q))) return true;
+      return false;
+    });
+  }, [articlesWithStock, searchQuery, categoryFilter, supplierFilter]);
 
   // ─── Article CRUD ──────────────────────────────────────────────────────
   const saveArticle = (article) => {
@@ -14333,7 +15494,51 @@ function SmallEquipmentView({ context }) {
       {/* ─── ARTICLES SECTION ───────────────────────────────────────────── */}
       {activeSection === 'articles' && (
         <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          {/* Barre de recherche + filtre catégorie + bouton d'ajout, alignée
+              sur le pattern d'ArticlesView pour la cohérence UX. */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', flex: '1 1 280px', minWidth: 220 }}>
+              <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft }} />
+              <input
+                className="mc-input"
+                style={{ paddingLeft: 40, width: '100%' }}
+                placeholder="Rechercher un article ou un alias…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+            <select
+              className="mc-input"
+              style={{ flex: '0 0 auto', minWidth: 180 }}
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              title="Filtrer par catégorie"
+            >
+              <option value="all">Toutes catégories</option>
+              {equipmentCategories.map((c) => (
+                <option key={c.id} value={c.id}>{c.label}</option>
+              ))}
+            </select>
+            {availableSuppliers.length > 0 && (
+              <select
+                className="mc-input"
+                style={{ flex: '0 0 auto', minWidth: 180 }}
+                value={supplierFilter}
+                onChange={(e) => setSupplierFilter(e.target.value)}
+                title="Filtrer par fournisseur"
+              >
+                <option value="all">Tous fournisseurs</option>
+                {availableSuppliers.map((sup) => (
+                  <option key={sup} value={sup}>{sup}</option>
+                ))}
+              </select>
+            )}
+            {(searchQuery || categoryFilter !== 'all' || supplierFilter !== 'all') && (
+              <span style={{ fontSize: 12, color: palette.inkSoft, whiteSpace: 'nowrap' }}>
+                {filteredArticles.length} sur {equipment.length} affichés
+              </span>
+            )}
+            <div style={{ flex: 1 }} />
             <button
               className="mc-btn mc-btn-primary"
               onClick={() => setEditingArticle({ id: null, name: '', categoryId: 'vaisselle', threshold: 0, estimatedUnitPrice: null })}
@@ -14347,11 +15552,17 @@ function SmallEquipmentView({ context }) {
             <div className="mc-card" style={{ padding: 32, textAlign: 'center', color: palette.inkSoft }}>
               Aucun article. Commencez par ajouter vos assiettes, verres, couverts…
             </div>
+          ) : filteredArticles.length === 0 ? (
+            <div className="mc-card" style={{ padding: 32, textAlign: 'center', color: palette.inkSoft }}>
+              Aucun article ne correspond à la recherche.
+            </div>
           ) : (
             <div className="mc-card" style={{ overflow: 'hidden' }}>
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr auto',
+                // Colonnes : Article | Catégorie | Fournisseur | Prix moy. | Achats depuis | Stock | Actions
+                // Article et Fournisseur sont plus larges car ils contiennent souvent des libellés longs.
+                gridTemplateColumns: '2fr 1fr 1.5fr 1fr 1fr 1fr 110px',
                 gap: 12,
                 padding: '12px 20px',
                 background: palette.paper,
@@ -14363,17 +15574,18 @@ function SmallEquipmentView({ context }) {
               }}>
                 <div>Article</div>
                 <div>Catégorie</div>
-                <div>Dernier inv.</div>
+                <div>Fournisseur</div>
+                <div>Prix moy.</div>
                 <div>Achats depuis</div>
-                <div>Estimé</div>
+                <div>Stock</div>
                 <div></div>
               </div>
-              {articlesWithStock.map((a) => {
+              {filteredArticles.map((a) => {
                 const isLow = a.threshold > 0 && a.lastInv && a.lastInv.qty < a.threshold;
                 return (
                   <div key={a.id} style={{
                     display: 'grid',
-                    gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr auto',
+                    gridTemplateColumns: '2fr 1fr 1.5fr 1fr 1fr 1fr 110px',
                     gap: 12,
                     padding: '14px 20px',
                     borderBottom: `1px solid ${palette.rule}`,
@@ -14399,23 +15611,60 @@ function SmallEquipmentView({ context }) {
                       )}
                     </div>
                     <div style={{ fontSize: 12, color: palette.inkSoft }}>
-                      {EQUIPMENT_CATEGORIES.find((c) => c.id === a.categoryId)?.label || a.categoryId}
+                      {equipmentCategories.find((c) => c.id === a.categoryId)?.label || a.categoryId}
                     </div>
-                    <div>
-                      {a.lastInv ? (
+                    {/* Fournisseur : on affiche le plus récent. S'il y en a plusieurs
+                        distincts, on indique « +N autres » en sous-titre. */}
+                    <div style={{ fontSize: 12 }}>
+                      {a.lastSupplier ? (
                         <>
-                          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>{a.lastInv.qty}</div>
-                          <div style={{ fontSize: 10, color: palette.inkSoft }}>{a.lastInv.date}</div>
+                          <div style={{ color: palette.ink }}>{a.lastSupplier}</div>
+                          {a.supplierCount > 1 && (
+                            <div style={{ fontSize: 10, color: palette.inkSoft, marginTop: 2 }}>
+                              + {a.supplierCount - 1} autre{a.supplierCount > 2 ? 's' : ''}
+                            </div>
+                          )}
                         </>
                       ) : (
-                        <span style={{ color: palette.inkSoft, fontSize: 12 }}>—</span>
+                        <span style={{ color: palette.inkSoft }}>—</span>
+                      )}
+                    </div>
+                    {/* Prix moyen unitaire pondéré sur l'ensemble des achats.
+                        Fallback sur estimatedUnitPrice si aucun achat enregistré. */}
+                    <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
+                      {a.avgUnitPrice != null ? (
+                        <>
+                          {formatEuro(a.avgUnitPrice)}
+                          {a.priceIsEstimated && (
+                            <div style={{ fontSize: 10, color: palette.inkSoft, fontWeight: 400, fontFamily: 'DM Sans, sans-serif', marginTop: 2 }}>
+                              estimé
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: palette.inkSoft, fontWeight: 400, fontSize: 12 }}>—</span>
                       )}
                     </div>
                     <div style={{ fontFamily: 'Fraunces, serif' }}>
                       {a.boughtSince > 0 ? `+ ${a.boughtSince}` : <span style={{ color: palette.inkSoft }}>—</span>}
                     </div>
+                    {/* Stock estimé = dernier inventaire + achats depuis cet inventaire.
+                        Si pas d'inventaire enregistré, on affiche « — » (impossible
+                        d'estimer sans point de référence). Date du dernier inventaire
+                        en sous-titre. */}
                     <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, color: isLow ? palette.wine : palette.ink }}>
-                      {a.estimatedCurrent != null ? a.estimatedCurrent : <span style={{ color: palette.inkSoft, fontSize: 12, fontWeight: 400 }}>—</span>}
+                      {a.estimatedCurrent != null ? (
+                        <>
+                          {a.estimatedCurrent}
+                          {a.lastInv?.date && (
+                            <div style={{ fontSize: 10, color: palette.inkSoft, fontWeight: 400, fontFamily: 'DM Sans, sans-serif', marginTop: 2 }}>
+                              Inv. {formatShortDate(a.lastInv.date)}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: palette.inkSoft, fontSize: 12, fontWeight: 400 }}>—</span>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: 4 }}>
                       <button className="mc-btn mc-btn-ghost" onClick={() => setEditingArticle(a)} style={{ padding: '4px 8px' }} title="Modifier">
@@ -14541,6 +15790,7 @@ function SmallEquipmentView({ context }) {
           article={editingArticle}
           onSave={saveArticle}
           onCancel={() => setEditingArticle(null)}
+          categories={equipmentCategories}
         />
       )}
 
@@ -14707,7 +15957,8 @@ function EquipmentMergeModal({ source, equipment, setEquipment, equipmentPurchas
   );
 }
 
-function EquipmentArticleEditor({ article, onSave, onCancel }) {
+function EquipmentArticleEditor({ article, onSave, onCancel, categories }) {
+  const equipmentCategories = categories || EQUIPMENT_CATEGORIES;
   const [draft, setDraft] = useState({
     id: article.id,
     name: article.name || '',
@@ -14753,7 +16004,7 @@ function EquipmentArticleEditor({ article, onSave, onCancel }) {
               onChange={(e) => setDraft({ ...draft, categoryId: e.target.value })}
               className="mc-input"
             >
-              {EQUIPMENT_CATEGORIES.map((c) => (
+              {equipmentCategories.map((c) => (
                 <option key={c.id} value={c.id}>{c.label}</option>
               ))}
             </select>
@@ -14967,7 +16218,7 @@ function EquipmentInventoryEditor({ equipment, onSave, onCancel }) {
                 <div style={{ fontSize: 13 }}>
                   <div>{eq.name}</div>
                   <div style={{ fontSize: 11, color: palette.inkSoft }}>
-                    {EQUIPMENT_CATEGORIES.find((c) => c.id === eq.categoryId)?.label}
+                    {equipmentCategories.find((c) => c.id === eq.categoryId)?.label}
                   </div>
                 </div>
                 <input
@@ -16065,6 +17316,750 @@ function SimulatorView({ context }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   SETTINGS VIEW — paramétrage utilisateur (catégories, seuils)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// L'utilisateur peut :
+//   · Ajouter / renommer / supprimer / fusionner les catégories d'articles,
+//     d'équipement (petit) et de gros équipement.
+//   · Régler les seuils colorés du food cost (sage/amber/wine) et les seuils
+//     d'alerte (tendance de prix, écart entre fournisseurs).
+//
+// Toutes les modifications passent par `setUserSettings` (et `setArticles` /
+// `setEquipment` / `setAssets` lors des renommages / suppressions / fusions,
+// pour propager le changement aux items qui référencent la catégorie).
+
+function SettingsView({ context }) {
+  const {
+    userSettings, setUserSettings,
+    articles, setArticles,
+    equipment, setEquipment,
+    assets, setAssets,
+    alertSettings, setAlertSettings,
+  } = context;
+
+  // Helper générique pour patcher une partie de userSettings
+  const patchSettings = (patch) => setUserSettings((s) => ({ ...s, ...patch }));
+  const patchThresholds = (patch) => setUserSettings((s) => ({
+    ...s,
+    thresholds: { ...s.thresholds, ...patch },
+  }));
+
+  // ─── Opérations sur les catégories d'articles (strings) ──────────────────
+  // article.category contient la string brute, donc renommer / fusionner /
+  // supprimer impose de mettre à jour le champ sur tous les articles concernés.
+  const countArticlesIn = (cat) => articles.filter((a) => (a.category || 'À trier') === cat).length;
+
+  const renameArticleCategory = (oldName, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return;
+    if (userSettings.articleCategories.includes(trimmed)) {
+      mcToast.error(`« ${trimmed} » existe déjà — utilisez Fusionner.`);
+      return;
+    }
+    const _snapList = userSettings.articleCategories;
+    const _snapArticles = articles;
+    patchSettings({
+      articleCategories: userSettings.articleCategories.map((c) => c === oldName ? trimmed : c),
+    });
+    setArticles(articles.map((a) =>
+      (a.category || 'À trier') === oldName ? { ...a, category: trimmed } : a
+    ));
+    mcToast.undo(`Renommé en « ${trimmed} »`, () => {
+      patchSettings({ articleCategories: _snapList });
+      setArticles(_snapArticles);
+      mcToast.success('Renommage annulé');
+    });
+  };
+
+  const addArticleCategory = (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (userSettings.articleCategories.includes(trimmed)) {
+      mcToast.error(`« ${trimmed} » existe déjà.`);
+      return;
+    }
+    patchSettings({
+      articleCategories: [...userSettings.articleCategories, trimmed],
+    });
+    mcToast.success(`Catégorie « ${trimmed} » ajoutée`);
+  };
+
+  const deleteArticleCategory = (name, reassignTo) => {
+    const _snapList = userSettings.articleCategories;
+    const _snapArticles = articles;
+    patchSettings({
+      articleCategories: userSettings.articleCategories.filter((c) => c !== name),
+    });
+    if (reassignTo) {
+      setArticles(articles.map((a) =>
+        (a.category || 'À trier') === name ? { ...a, category: reassignTo } : a
+      ));
+    }
+    mcToast.undo(`Catégorie « ${name} » supprimée`, () => {
+      patchSettings({ articleCategories: _snapList });
+      setArticles(_snapArticles);
+      mcToast.success('Restauré');
+    });
+  };
+
+  const mergeArticleCategory = (source, target) => {
+    if (source === target) return;
+    const _snapList = userSettings.articleCategories;
+    const _snapArticles = articles;
+    setArticles(articles.map((a) =>
+      (a.category || 'À trier') === source ? { ...a, category: target } : a
+    ));
+    patchSettings({
+      articleCategories: userSettings.articleCategories.filter((c) => c !== source),
+    });
+    mcToast.undo(`« ${source} » fusionné dans « ${target} »`, () => {
+      patchSettings({ articleCategories: _snapList });
+      setArticles(_snapArticles);
+      mcToast.success('Fusion annulée');
+    });
+  };
+
+  // ─── Opérations sur les catégories d'équipement / gros équipement ────────
+  // Modèle { id, label } : on garde l'id stable, on renomme le label seulement.
+  // Pour la suppression / fusion, on déplace les items via categoryId.
+
+  function makeIdLabelOps({ list, setList, items, setItems, itemKey, listKey, label }) {
+    const countIn = (catId) => items.filter((it) => it.categoryId === catId).length;
+    return {
+      countIn,
+      rename: (id, newLabel) => {
+        const trimmed = newLabel.trim();
+        if (!trimmed) return;
+        const _snap = list;
+        setList(list.map((c) => c.id === id ? { ...c, label: trimmed } : c));
+        mcToast.undo(`Renommé en « ${trimmed} »`, () => { setList(_snap); mcToast.success('Annulé'); });
+      },
+      add: (labelText) => {
+        const trimmed = labelText.trim();
+        if (!trimmed) return;
+        // Génération d'un id depuis le label, en évitant les collisions
+        const baseId = stripAccents(trimmed).toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 40) || 'cat_' + Math.random().toString(36).slice(2, 7);
+        let id = baseId, suffix = 1;
+        while (list.find((c) => c.id === id)) { id = baseId + '_' + (++suffix); }
+        setList([...list, { id, label: trimmed }]);
+        mcToast.success(`Catégorie « ${trimmed} » ajoutée`);
+      },
+      remove: (id, reassignToId) => {
+        const removed = list.find((c) => c.id === id);
+        const _snapList = list;
+        const _snapItems = items;
+        setList(list.filter((c) => c.id !== id));
+        if (reassignToId) {
+          setItems(items.map((it) => it.categoryId === id ? { ...it, categoryId: reassignToId } : it));
+        }
+        mcToast.undo(`Catégorie « ${removed?.label || id} » supprimée`, () => {
+          setList(_snapList); setItems(_snapItems); mcToast.success('Restauré');
+        });
+      },
+      merge: (sourceId, targetId) => {
+        if (sourceId === targetId) return;
+        const source = list.find((c) => c.id === sourceId);
+        const target = list.find((c) => c.id === targetId);
+        const _snapList = list;
+        const _snapItems = items;
+        setItems(items.map((it) => it.categoryId === sourceId ? { ...it, categoryId: targetId } : it));
+        setList(list.filter((c) => c.id !== sourceId));
+        mcToast.undo(`« ${source?.label} » fusionné dans « ${target?.label} »`, () => {
+          setList(_snapList); setItems(_snapItems); mcToast.success('Annulé');
+        });
+      },
+    };
+  }
+
+  const equipOps = makeIdLabelOps({
+    list: userSettings.equipmentCategories,
+    setList: (next) => patchSettings({ equipmentCategories: typeof next === 'function' ? next(userSettings.equipmentCategories) : next }),
+    items: equipment,
+    setItems: setEquipment,
+  });
+
+  const assetOps = makeIdLabelOps({
+    list: userSettings.assetCategories,
+    setList: (next) => patchSettings({ assetCategories: typeof next === 'function' ? next(userSettings.assetCategories) : next }),
+    items: assets,
+    setItems: setAssets,
+  });
+
+  // ─── Reset complet aux défauts ───────────────────────────────────────────
+  const resetAll = () => {
+    if (!window.confirm('Restaurer tous les réglages aux valeurs par défaut ? Les catégories personnalisées seront perdues (les articles existants restent inchangés, mais leur catégorie pourra ne plus apparaître dans les listes).')) return;
+    setUserSettings(mergeUserSettings(null));
+    mcToast.success('Réglages restaurés');
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 920 }}>
+      <div>
+        <p style={{ fontSize: 13, color: palette.inkSoft, margin: 0 }}>
+          Personnalisez les catégories utilisées dans toute l'application et les seuils
+          qui pilotent les alertes et le code couleur. Les modifications sont sauvegardées
+          automatiquement et synchronisées via Drive si la synchro est active.
+        </p>
+      </div>
+
+      {/* ─── Catégories d'articles ────────────────────────────────────────── */}
+      <StringCategoriesSection
+        title="Catégories d'articles"
+        helper="Utilisées dans le Catalogue et lors de la classification automatique des factures."
+        list={userSettings.articleCategories}
+        countFor={countArticlesIn}
+        onAdd={addArticleCategory}
+        onRename={renameArticleCategory}
+        onDelete={deleteArticleCategory}
+        onMerge={mergeArticleCategory}
+        itemLabel="article"
+      />
+
+      {/* ─── Catégories d'équipement (petit) ──────────────────────────────── */}
+      <IdLabelCategoriesSection
+        title="Catégories de petit équipement"
+        helper="Vaisselle, couverts, verres, ustensiles… utilisées dans l'onglet Équipement."
+        list={userSettings.equipmentCategories}
+        countFor={equipOps.countIn}
+        onAdd={equipOps.add}
+        onRename={equipOps.rename}
+        onDelete={equipOps.remove}
+        onMerge={equipOps.merge}
+        itemLabel="article"
+      />
+
+      {/* ─── Catégories de gros équipement ────────────────────────────────── */}
+      <IdLabelCategoriesSection
+        title="Catégories de gros équipement"
+        helper="Cuisson, froid, préparation… pour les frigos, fours, machines."
+        list={userSettings.assetCategories}
+        countFor={assetOps.countIn}
+        onAdd={assetOps.add}
+        onRename={assetOps.rename}
+        onDelete={assetOps.remove}
+        onMerge={assetOps.merge}
+        itemLabel="équipement"
+      />
+
+      {/* ─── Seuils et alertes ────────────────────────────────────────────── */}
+      <div className="mc-card" style={{ padding: 20 }}>
+        <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
+          Seuils et alertes
+        </h3>
+        <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 16px' }}>
+          Calibrez les seuils utilisés par les codes couleur et les alertes.
+        </p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <ThresholdInput
+            label="Food cost — seuil bas (vert)"
+            help="Sous ce ratio, le food cost s'affiche en vert (sain)."
+            value={Math.round(userSettings.thresholds.foodCostGreen * 1000) / 10}
+            suffix="%"
+            min={0} max={100} step={0.5}
+            onChange={(v) => patchThresholds({ foodCostGreen: v / 100 })}
+          />
+          <ThresholdInput
+            label="Food cost — seuil haut (orange / rouge)"
+            help="Au-dessus, le food cost passe en rouge (à corriger)."
+            value={Math.round(userSettings.thresholds.foodCostAmber * 1000) / 10}
+            suffix="%"
+            min={0} max={100} step={0.5}
+            onChange={(v) => patchThresholds({ foodCostAmber: v / 100 })}
+          />
+          <ThresholdInput
+            label="Tendance de prix — seuil d'alerte"
+            help="Au-delà de cette hausse sur 30 jours, on émet une alerte « prix en hausse »."
+            value={userSettings.thresholds.priceTrendPct}
+            suffix="%"
+            min={1} max={100} step={1}
+            onChange={(v) => patchThresholds({ priceTrendPct: v })}
+          />
+          <ThresholdInput
+            label="Écart entre fournisseurs"
+            help="Au-delà de cet écart de prix entre deux fournisseurs pour un même article, on alerte."
+            value={alertSettings.supplierGapThresholdPct ?? userSettings.thresholds.supplierGapPct}
+            suffix="%"
+            min={1} max={100} step={1}
+            onChange={(v) => {
+              // Synchro double : alertSettings (consommé par buildAlertsIndex)
+              // et userSettings (pour l'affichage cohérent dans les Réglages).
+              setAlertSettings((s) => ({ ...s, supplierGapThresholdPct: v }));
+              patchThresholds({ supplierGapPct: v });
+            }}
+          />
+        </div>
+      </div>
+
+      {/* ─── Reset ─────────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: `1px solid ${palette.rule}`, paddingTop: 16 }}>
+        <button
+          onClick={resetAll}
+          className="mc-btn mc-btn-ghost"
+          style={{ color: palette.wine, fontSize: 12 }}
+        >
+          Restaurer les valeurs par défaut
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Section catégories type "string" (articles alimentaires) ───────────────
+function StringCategoriesSection({ title, helper, list, countFor, onAdd, onRename, onDelete, onMerge, itemLabel }) {
+  const [newName, setNewName] = useState('');
+  const [editingIdx, setEditingIdx] = useState(null);
+  const [editValue, setEditValue] = useState('');
+  const [deleteFor, setDeleteFor] = useState(null);   // catégorie en cours de suppression
+  const [mergeFor, setMergeFor] = useState(null);     // catégorie en cours de fusion
+
+  const commitEdit = (oldName) => {
+    if (editValue.trim() && editValue !== oldName) onRename(oldName, editValue);
+    setEditingIdx(null);
+    setEditValue('');
+  };
+
+  const submitAdd = () => {
+    if (newName.trim()) {
+      onAdd(newName);
+      setNewName('');
+    }
+  };
+
+  return (
+    <div className="mc-card" style={{ padding: 20 }}>
+      <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>{title}</h3>
+      <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 16px' }}>{helper}</p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {list.map((cat, idx) => {
+          const count = countFor(cat);
+          const isEditing = editingIdx === idx;
+          return (
+            <div
+              key={cat}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 10px',
+                borderRadius: 6,
+                background: idx % 2 === 0 ? 'transparent' : palette.paper + '60',
+              }}
+            >
+              {isEditing ? (
+                <input
+                  className="mc-input"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onBlur={() => commitEdit(cat)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitEdit(cat);
+                    if (e.key === 'Escape') { setEditingIdx(null); setEditValue(''); }
+                  }}
+                  autoFocus
+                  style={{ flex: 1, fontSize: 13 }}
+                />
+              ) : (
+                <>
+                  <div style={{ flex: 1, fontSize: 13.5, fontWeight: 500 }}>{cat}</div>
+                  <div style={{ fontSize: 11, color: palette.inkSoft, minWidth: 80, textAlign: 'right' }}>
+                    {count} {itemLabel}{count !== 1 ? 's' : ''}
+                  </div>
+                  <button
+                    onClick={() => { setEditingIdx(idx); setEditValue(cat); }}
+                    className="mc-btn mc-btn-ghost"
+                    style={{ padding: '4px 8px' }}
+                    title="Renommer"
+                  >
+                    <Edit3 size={13} />
+                  </button>
+                  <button
+                    onClick={() => setMergeFor(cat)}
+                    className="mc-btn mc-btn-ghost"
+                    style={{ padding: '4px 8px' }}
+                    title="Fusionner dans une autre catégorie"
+                    disabled={list.length < 2}
+                  >
+                    <Link2 size={13} />
+                  </button>
+                  <button
+                    onClick={() => count > 0 ? setDeleteFor(cat) : onDelete(cat, null)}
+                    className="mc-btn mc-btn-ghost"
+                    style={{ padding: '4px 8px', color: palette.wine }}
+                    title="Supprimer"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add row */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${palette.rule}` }}>
+        <input
+          className="mc-input"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); }}
+          placeholder="Nouvelle catégorie…"
+          style={{ flex: 1 }}
+        />
+        <button
+          onClick={submitAdd}
+          className="mc-btn mc-btn-primary"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          disabled={!newName.trim()}
+        >
+          <Plus size={14} /> Ajouter
+        </button>
+      </div>
+
+      {/* Modale suppression avec réaffectation */}
+      {deleteFor && (
+        <DeleteCategoryModal
+          name={deleteFor}
+          count={countFor(deleteFor)}
+          options={list.filter((c) => c !== deleteFor)}
+          itemLabel={itemLabel}
+          onCancel={() => setDeleteFor(null)}
+          onConfirm={(reassignTo) => {
+            onDelete(deleteFor, reassignTo);
+            setDeleteFor(null);
+          }}
+        />
+      )}
+
+      {/* Modale fusion */}
+      {mergeFor && (
+        <MergeCategoryModal
+          source={mergeFor}
+          count={countFor(mergeFor)}
+          options={list.filter((c) => c !== mergeFor)}
+          itemLabel={itemLabel}
+          onCancel={() => setMergeFor(null)}
+          onConfirm={(target) => {
+            onMerge(mergeFor, target);
+            setMergeFor(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Section catégories type "{id, label}" (équipement, gros équipement) ────
+// Très proche de StringCategoriesSection mais on adresse les items par leur id
+// stable plutôt que par leur label (qu'on peut renommer librement).
+function IdLabelCategoriesSection({ title, helper, list, countFor, onAdd, onRename, onDelete, onMerge, itemLabel }) {
+  const [newName, setNewName] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editValue, setEditValue] = useState('');
+  const [deleteFor, setDeleteFor] = useState(null);
+  const [mergeFor, setMergeFor] = useState(null);
+
+  const commitEdit = (cat) => {
+    if (editValue.trim() && editValue !== cat.label) onRename(cat.id, editValue);
+    setEditingId(null);
+    setEditValue('');
+  };
+
+  const submitAdd = () => {
+    if (newName.trim()) {
+      onAdd(newName);
+      setNewName('');
+    }
+  };
+
+  return (
+    <div className="mc-card" style={{ padding: 20 }}>
+      <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>{title}</h3>
+      <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 16px' }}>{helper}</p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {list.map((cat, idx) => {
+          const count = countFor(cat.id);
+          const isEditing = editingId === cat.id;
+          return (
+            <div
+              key={cat.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 10px',
+                borderRadius: 6,
+                background: idx % 2 === 0 ? 'transparent' : palette.paper + '60',
+              }}
+            >
+              {isEditing ? (
+                <input
+                  className="mc-input"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onBlur={() => commitEdit(cat)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitEdit(cat);
+                    if (e.key === 'Escape') { setEditingId(null); setEditValue(''); }
+                  }}
+                  autoFocus
+                  style={{ flex: 1, fontSize: 13 }}
+                />
+              ) : (
+                <>
+                  <div style={{ flex: 1, fontSize: 13.5, fontWeight: 500 }}>{cat.label}</div>
+                  <div style={{ fontSize: 11, color: palette.inkSoft, minWidth: 100, textAlign: 'right' }}>
+                    {count} {itemLabel}{count !== 1 ? 's' : ''}
+                  </div>
+                  <button
+                    onClick={() => { setEditingId(cat.id); setEditValue(cat.label); }}
+                    className="mc-btn mc-btn-ghost"
+                    style={{ padding: '4px 8px' }}
+                    title="Renommer"
+                  >
+                    <Edit3 size={13} />
+                  </button>
+                  <button
+                    onClick={() => setMergeFor(cat)}
+                    className="mc-btn mc-btn-ghost"
+                    style={{ padding: '4px 8px' }}
+                    title="Fusionner dans une autre catégorie"
+                    disabled={list.length < 2}
+                  >
+                    <Link2 size={13} />
+                  </button>
+                  <button
+                    onClick={() => count > 0 ? setDeleteFor(cat) : onDelete(cat.id, null)}
+                    className="mc-btn mc-btn-ghost"
+                    style={{ padding: '4px 8px', color: palette.wine }}
+                    title="Supprimer"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${palette.rule}` }}>
+        <input
+          className="mc-input"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); }}
+          placeholder="Nouvelle catégorie…"
+          style={{ flex: 1 }}
+        />
+        <button
+          onClick={submitAdd}
+          className="mc-btn mc-btn-primary"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          disabled={!newName.trim()}
+        >
+          <Plus size={14} /> Ajouter
+        </button>
+      </div>
+
+      {deleteFor && (
+        <DeleteCategoryModal
+          name={deleteFor.label}
+          count={countFor(deleteFor.id)}
+          options={list.filter((c) => c.id !== deleteFor.id).map((c) => c.label)}
+          optionIds={list.filter((c) => c.id !== deleteFor.id).map((c) => c.id)}
+          itemLabel={itemLabel}
+          onCancel={() => setDeleteFor(null)}
+          onConfirm={(reassignToId) => {
+            onDelete(deleteFor.id, reassignToId);
+            setDeleteFor(null);
+          }}
+        />
+      )}
+
+      {mergeFor && (
+        <MergeCategoryModal
+          source={mergeFor.label}
+          count={countFor(mergeFor.id)}
+          options={list.filter((c) => c.id !== mergeFor.id).map((c) => c.label)}
+          optionIds={list.filter((c) => c.id !== mergeFor.id).map((c) => c.id)}
+          itemLabel={itemLabel}
+          onCancel={() => setMergeFor(null)}
+          onConfirm={(targetId) => {
+            onMerge(mergeFor.id, targetId);
+            setMergeFor(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Modale de suppression avec réaffectation des items ─────────────────────
+// Si la catégorie contient encore des items, on force le choix d'une catégorie
+// de destination ; sinon, on autorise « Aucune » (les items resteront avec
+// leur catégorie actuelle, qui deviendra orpheline mais affichable).
+function DeleteCategoryModal({ name, count, options, optionIds, itemLabel, onCancel, onConfirm }) {
+  const [reassignTo, setReassignTo] = useState(options[0] || '');
+  const ids = optionIds || options;
+  const getId = () => optionIds ? ids[options.indexOf(reassignTo)] : reassignTo;
+
+  return (
+    <div className="mc-overlay" onClick={onCancel}>
+      <div className="mc-modal" style={{ maxWidth: 480, padding: 32 }} onClick={(e) => e.stopPropagation()}>
+        <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 12px' }}>
+          Supprimer « {name} » ?
+        </h3>
+        {count > 0 ? (
+          <>
+            <p style={{ fontSize: 13, color: palette.inkSoft, margin: '0 0 12px' }}>
+              <strong>{count}</strong> {itemLabel}{count > 1 ? 's' : ''} {count > 1 ? 'utilisent' : 'utilise'} cette catégorie.
+              Choisissez où {count > 1 ? 'les' : 'l\''} déplacer :
+            </p>
+            <select
+              className="mc-input"
+              value={reassignTo}
+              onChange={(e) => setReassignTo(e.target.value)}
+              style={{ width: '100%', marginBottom: 16 }}
+            >
+              {options.map((opt) => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
+          </>
+        ) : (
+          <p style={{ fontSize: 13, color: palette.inkSoft, margin: '0 0 16px' }}>
+            Aucun {itemLabel} n'utilise cette catégorie, la suppression est sans impact.
+          </p>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="mc-btn mc-btn-ghost" onClick={onCancel}>Annuler</button>
+          <button
+            className="mc-btn mc-btn-primary"
+            onClick={() => onConfirm(count > 0 ? getId() : null)}
+            style={{ background: palette.wine }}
+          >
+            Supprimer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Modale de fusion ───────────────────────────────────────────────────────
+function MergeCategoryModal({ source, count, options, optionIds, itemLabel, onCancel, onConfirm }) {
+  const [target, setTarget] = useState(options[0] || '');
+  const ids = optionIds || options;
+  const getId = () => optionIds ? ids[options.indexOf(target)] : target;
+
+  if (options.length === 0) {
+    return (
+      <div className="mc-overlay" onClick={onCancel}>
+        <div className="mc-modal" style={{ maxWidth: 420, padding: 32 }} onClick={(e) => e.stopPropagation()}>
+          <p style={{ fontSize: 13, color: palette.inkSoft, margin: '0 0 16px' }}>
+            Pas d'autre catégorie disponible pour la fusion.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="mc-btn mc-btn-ghost" onClick={onCancel}>Fermer</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mc-overlay" onClick={onCancel}>
+      <div className="mc-modal" style={{ maxWidth: 480, padding: 32 }} onClick={(e) => e.stopPropagation()}>
+        <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 12px' }}>
+          Fusionner « {source} »
+        </h3>
+        <p style={{ fontSize: 13, color: palette.inkSoft, margin: '0 0 12px' }}>
+          {count > 0 ? (
+            <>Les <strong>{count}</strong> {itemLabel}{count > 1 ? 's' : ''} de cette catégorie seront déplacé{count > 1 ? 's' : ''} vers la catégorie cible, puis « {source} » sera supprimée.</>
+          ) : (
+            <>« {source} » sera supprimée. Aucun {itemLabel} ne sera affecté.</>
+          )}
+        </p>
+        <div style={{ fontSize: 12, color: palette.inkSoft, marginBottom: 4 }}>Fusionner dans :</div>
+        <select
+          className="mc-input"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          style={{ width: '100%', marginBottom: 16 }}
+        >
+          {options.map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="mc-btn mc-btn-ghost" onClick={onCancel}>Annuler</button>
+          <button
+            className="mc-btn mc-btn-primary"
+            onClick={() => onConfirm(getId())}
+            disabled={!target}
+          >
+            Fusionner
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Champ de saisie pour un seuil numérique ────────────────────────────────
+function ThresholdInput({ label, help, value, suffix, min, max, step, onChange }) {
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr 160px',
+      gap: 16,
+      alignItems: 'center',
+    }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{label}</div>
+        <div style={{ fontSize: 11, color: palette.inkSoft }}>{help}</div>
+      </div>
+      <div style={{ position: 'relative' }}>
+        <input
+          type="number"
+          className="mc-input"
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          onChange={(e) => {
+            const v = parseFloat(e.target.value);
+            if (!Number.isNaN(v)) onChange(v);
+          }}
+          style={{ width: '100%', paddingRight: 28, textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}
+        />
+        {suffix && (
+          <span style={{
+            position: 'absolute',
+            right: 10,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            fontSize: 12,
+            color: palette.inkSoft,
+            pointerEvents: 'none',
+          }}>
+            {suffix}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
