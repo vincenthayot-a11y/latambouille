@@ -1,4 +1,209 @@
-<!DOCTYPE html>
+{/* Suggestions d'économies — on demand */}
+      <div style={{ borderRadius: 8, border: `1px solid ${palette.rule}`, overflow: 'hidden' }}>
+        <button className="mc-btn mc-btn-ghost"
+          onClick={() => setShowSuggestions((s) => !s)}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', fontSize: 13, width: '100%', justifyContent: 'space-between', borderRadius: 0, border: 'none' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <AlertCircle size={16} style={{ color: palette.amber }} />
+            <strong>Suggestions d'économies</strong>
+            {(savingsSuggestions.length > 0 || variantSimulation.length > 0) && (
+              <span className="mc-pill" style={{ background: palette.amber + '20', color: palette.amber, fontWeight: 600 }}>
+                {savingsSuggestions.length + (variantSimulation.length > 0 ? 1 : 0)} suggestion{savingsSuggestions.length + (variantSimulation.length > 0 ? 1 : 0) > 1 ? 's' : ''}
+              </span>
+            )}
+          </span>
+          <span style={{ color: palette.inkSoft, fontSize: 12 }}>{showSuggestions ? '▲ Masquer' : '▼ Voir les suggestions'}</span>
+        </button>
+        {showSuggestions && (
+          <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {savingsSuggestions.length === 0 && variantSimulation.length === 0 ? (
+              <div style={{ padding: '12px 0', fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>
+                Aucune suggestion détectée sur cette période.
+              </div>
+            ) : (
+              <>
+                {variantSimulation.length > 0 && (
+                  <div style={{ padding: '14px 16px', borderRadius: 8, background: palette.sage + '10', border: `1px solid ${palette.sage}30` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: 13 }}>💰</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: palette.sage, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Variantes moins chères disponibles</span>
+                        </div>
+                        <div style={{ fontSize: 13, color: palette.ink, marginBottom: 4 }}>
+                          {variantSimulation.length} article{variantSimulation.length > 1 ? 's' : ''} acheté{variantSimulation.length > 1 ? 's' : ''} en plusieurs variantes à des prix différents.
+                        </div>
+                        <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic' }}>→ Voir la simulation par variante ci-dessous pour le détail</div>
+                      </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontSize: 10, color: palette.inkSoft }}>Impact estimé</div>
+                        <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 18, color: palette.sage }}>
+                          {formatEuro(variantSimulation.reduce((s, r) => s + r.potentialSavings, 0))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {savingsSuggestions.map((s, i) => {
+                  const cfg = s.type === 'supplier_gap'
+                    ? { color: palette.wine, icon: '🔁', bg: palette.wine + '10' }
+                    : { color: palette.amber, icon: '📈', bg: palette.amber + '10' };
+                  return (
+                    <div key={i} style={{ padding: '14px 16px', borderRadius: 8, background: cfg.bg, border: `1px solid ${cfg.color}30` }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            <span style={{ fontSize: 13 }}>{cfg.icon}</span>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: cfg.color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</span>
+                          </div>
+                          <div style={{ fontSize: 13, color: palette.ink, marginBottom: 4 }}>{s.detail}</div>
+                          <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic' }}>→ {s.action}</div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <div style={{ fontSize: 10, color: palette.inkSoft }}>Impact estimé</div>
+                          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 18, color: cfg.color }}>{formatEuro(s.priority)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Simulation par variante — on demand */}
+      <div style={{ borderRadius: 8, border: `1px solid ${palette.rule}`, overflow: 'hidden' }}>
+        <button className="mc-btn mc-btn-ghost"
+          onClick={() => setShowVariantSim((s) => !s)}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', fontSize: 13, width: '100%', justifyContent: 'space-between', borderRadius: 0, border: 'none' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <TrendingUp size={16} style={{ color: palette.wine }} />
+            <strong>Simulation par variante</strong>
+            {variantSimulation.length > 0 && (
+              <span className="mc-pill" style={{ background: palette.sage + '20', color: palette.sage, fontWeight: 600 }}>
+                {variantSimulation.length} article{variantSimulation.length > 1 ? 's' : ''} · {formatEuro(variantSimulation.reduce((s, r) => s + r.potentialSavings, 0))} d'économie potentielle
+              </span>
+            )}
+          </span>
+          <span style={{ color: palette.inkSoft, fontSize: 12 }}>{showVariantSim ? '▲ Masquer' : '▼ Analyser mes variantes'}</span>
+        </button>
+        {showVariantSim && (
+          <div style={{ padding: '0 16px 16px' }}>
+            {variantSimulation.length === 0 ? (
+              <div style={{ padding: '12px 0', fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>
+                Aucun article acheté en plusieurs variantes sur cette période.
+              </div>
+            ) : (
+              <>
+                <div style={{ padding: '12px 0 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: palette.inkSoft }}>Économie totale potentielle sur la période</span>
+                  <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 20, color: palette.sage }}>
+                    {formatEuro(variantSimulation.reduce((s, r) => s + r.potentialSavings, 0))}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {variantSimulation.map(({ article, variantEntries, totalQtyBought, totalActualSpend, cheapest, hypotheticalSpend, potentialSavings }) => (
+                    <div key={article.id} style={{ border: `1px solid ${palette.rule}`, borderRadius: 8, overflow: 'hidden' }}>
+                      <div style={{ padding: '12px 16px', background: palette.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 14 }}>{article.name}</div>
+                          <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2 }}>
+                            {totalQtyBought % 1 === 0 ? totalQtyBought : totalQtyBought.toFixed(2)} {article.unit} achetés · Dépensé réel : <strong>{formatEuro(totalActualSpend)}</strong>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: 11, color: palette.inkSoft }}>Économie potentielle</div>
+                          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 20, color: palette.sage }}>{formatEuro(potentialSavings)}</div>
+                          <div style={{ fontSize: 11, color: palette.inkSoft }}>Si tout acheté chez <em>{cheapest.variantName}</em></div>
+                        </div>
+                      </div>
+                      <div style={{ padding: '8px 0' }}>
+                        {variantEntries.map((v, idx) => {
+                          const isCheapest = idx === 0;
+                          const pctAbove = cheapest.avgPrice > 0 ? ((v.avgPrice - cheapest.avgPrice) / cheapest.avgPrice) * 100 : 0;
+                          const overspend = v.totalAmount - (v.totalQty * cheapest.avgPrice);
+                          return (
+                            <div key={v.variantId} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 8, padding: '8px 16px', borderBottom: idx < variantEntries.length - 1 ? `1px solid ${palette.rule}` : 'none', alignItems: 'center', fontSize: 13 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ color: isCheapest ? palette.sage : palette.wine, fontSize: 14 }}>{isCheapest ? '↓' : '↑'}</span>
+                                <div>
+                                  <div style={{ fontWeight: isCheapest ? 600 : 400 }}>{v.variantName}</div>
+                                  {isCheapest && <div style={{ fontSize: 10, color: palette.sage, fontWeight: 600 }}>Moins chère</div>}
+                                </div>
+                              </div>
+                              <div style={{ textAlign: 'right', color: palette.inkSoft, fontSize: 12 }}>{v.totalQty % 1 === 0 ? v.totalQty : v.totalQty.toFixed(2)} {article.unit}</div>
+                              <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600, color: isCheapest ? palette.sage : palette.ink }}>{formatEuro(v.avgPrice)}/{article.unit}</div>
+                              <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif' }}>{formatEuro(v.totalAmount)}</div>
+                              <div style={{ textAlign: 'right' }}>
+                                {!isCheapest
+                                  ? <span style={{ background: palette.wine + '15', color: palette.wine, fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4 }}>+{formatEuro(overspend)} (+{pctAbove.toFixed(0)}%)</span>
+                                  : <span style={{ fontSize: 11, color: palette.sage }}>référence</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={{ padding: '10px 16px', background: palette.sage + '08', borderTop: `1px solid ${palette.sage}30`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                        <span style={{ color: palette.inkSoft }}>Si tout acheté à <strong>{formatEuro(cheapest.avgPrice)}/{article.unit}</strong> ({cheapest.variantName}) :</span>
+                        <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
+                          {formatEuro(hypotheticalSpend)} <span style={{ color: palette.sage, marginLeft: 8 }}>(−{formatEuro(potentialSavings)})</span>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Achats par article */}
+      <div className="mc-card" style={{ padding: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+            Achats par article — {reportFrom} → {reportTo}
+          </h3>
+          <div style={{ position: 'relative', minWidth: 240 }}>
+            <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft }} />
+            <input type="text" value={articleSearch} onChange={(e) => setArticleSearch(e.target.value)}
+              placeholder="Rechercher un article…"
+              style={{ paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8, border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13, width: '100%' }} />
+          </div>
+        </div>
+        {filteredArticleStats.length === 0 ? (
+          <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic', padding: '12px 0' }}>
+            {articleSearch ? 'Aucun article ne correspond.' : 'Aucun achat sur cette période.'}
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', padding: '8px 0', fontSize: 11, fontWeight: 600, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `1px solid ${palette.rule}`, marginBottom: 4 }}>
+              <div>Article</div>
+              <div style={{ textAlign: 'right' }}>Qté</div>
+              <div style={{ textAlign: 'right' }}>Montant HT</div>
+              <div style={{ textAlign: 'right' }}>Factures</div>
+            </div>
+            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+              {filteredArticleStats.map(({ article, totalQty, totalAmount, orderCount }) => (
+                <div key={article.id} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', padding: '10px 0', borderBottom: `1px solid ${palette.rule}`, fontSize: 13, alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 500, color: palette.ink }}>{article.name}</div>
+                    <div style={{ fontSize: 11, color: palette.inkSoft }}>{article.category}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>{totalQty % 1 === 0 ? totalQty : totalQty.toFixed(2)} {article.unit}</div>
+                  <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>{formatEuro(totalAmount)}</div>
+                  <div style={{ textAlign: 'right', color: palette.inkSoft }}>{orderCount}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 10, textAlign: 'right' }}>
+              {filteredArticleStats.length} articles · Total : {formatEuro(filteredArticleStats.reduce((s, e) => s + e.totalAmount, 0))}
+            </div>
+          </>
+        )}
+      </div><!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
@@ -16664,8 +16869,9 @@ function ReportView({ context }) {
   const [reportFrom, setReportFrom] = useState(firstOfMonth);
   const [reportTo, setReportTo] = useState(today);
   const [articleSearch, setArticleSearch] = useState('');
+  const [showVariantSim, setShowVariantSim] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // Previous period (same duration, just before)
   const prevPeriod = useMemo(() => {
     if (!reportFrom || !reportTo) return { from: '', to: '' };
     const from = new Date(reportFrom);
@@ -16673,10 +16879,7 @@ function ReportView({ context }) {
     const durationMs = to - from;
     const prevTo = new Date(from - 1);
     const prevFrom = new Date(prevTo - durationMs);
-    return {
-      from: prevFrom.toISOString().slice(0, 10),
-      to: prevTo.toISOString().slice(0, 10),
-    };
+    return { from: prevFrom.toISOString().slice(0, 10), to: prevTo.toISOString().slice(0, 10) };
   }, [reportFrom, reportTo]);
 
   const monthPurchases = useMemo(() =>
@@ -16743,14 +16946,7 @@ function ReportView({ context }) {
   const activeAlerts = alertsIndex.slice(0, 8);
 
   // Month label
-  const monthLabel = (key) => {
-    const [y, m] = key.split('-');
-    const months = ['Janvier','Février','Mars','Avril','Mai','Juin',
-                    'Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-    return `${months[parseInt(m, 10) - 1]} ${y}`;
-  };
-
-  // All articles stats for the period
+  // Article stats for the period
   const articleStats = useMemo(() => {
     const map = {};
     for (const p of monthPurchases) {
@@ -16763,7 +16959,7 @@ function ReportView({ context }) {
       }
     }
     return Object.entries(map)
-      .map(([id, stats]) => ({ article: articles.find((a) => a.id === id), ...stats }))
+      .map(([id, s]) => ({ article: articles.find((a) => a.id === id), ...s }))
       .filter((e) => e.article)
       .sort((a, b) => b.totalAmount - a.totalAmount);
   }, [monthPurchases, articles]);
@@ -16773,6 +16969,107 @@ function ReportView({ context }) {
     const q = articleSearch.toLowerCase();
     return articleStats.filter((e) => e.article.name.toLowerCase().includes(q));
   }, [articleStats, articleSearch]);
+
+  // Variant simulation: what if everything bought at cheapest variant price?
+  const variantSimulation = useMemo(() => {
+    const byArticle = {};
+    for (const p of monthPurchases) {
+      for (const item of (p.items || [])) {
+        if (!item.articleId || !(item.convertedQty > 0) || !(item.total > 0)) continue;
+        if (!byArticle[item.articleId]) byArticle[item.articleId] = {};
+        const varId = item.variantId || '__unknown__';
+        if (!byArticle[item.articleId][varId]) byArticle[item.articleId][varId] = { totalQty: 0, totalAmount: 0 };
+        byArticle[item.articleId][varId].totalQty += item.convertedQty;
+        byArticle[item.articleId][varId].totalAmount += item.total;
+      }
+    }
+    const results = [];
+    for (const [artId, varMap] of Object.entries(byArticle)) {
+      const art = articles.find((a) => a.id === artId);
+      if (!art || (art.variants || []).length < 2) continue;
+      const variantEntries = Object.entries(varMap).map(([varId, d]) => {
+        const variant = (art.variants || []).find((v) => v.id === varId);
+        const avgPrice = d.totalQty > 0 ? d.totalAmount / d.totalQty : 0;
+        return { variantId: varId, variantName: variant?.name || 'Variante inconnue', totalQty: d.totalQty, totalAmount: d.totalAmount, avgPrice };
+      }).filter((v) => v.avgPrice > 0).sort((a, b) => a.avgPrice - b.avgPrice);
+      if (variantEntries.length < 2) continue;
+      const totalQtyBought = variantEntries.reduce((s, v) => s + v.totalQty, 0);
+      const totalActualSpend = variantEntries.reduce((s, v) => s + v.totalAmount, 0);
+      const cheapest = variantEntries[0];
+      const hypotheticalSpend = totalQtyBought * cheapest.avgPrice;
+      const potentialSavings = totalActualSpend - hypotheticalSpend;
+      if (potentialSavings < 0.5) continue;
+      results.push({ article: art, variantEntries, totalQtyBought, totalActualSpend, cheapest, hypotheticalSpend, potentialSavings });
+    }
+    return results.sort((a, b) => b.potentialSavings - a.potentialSavings);
+  }, [monthPurchases, articles]);
+
+  // Savings suggestions (rule-based, instant)
+  const savingsSuggestions = useMemo(() => {
+    const suggestions = [];
+    // Rule A: supplier gap for the period
+    const artSupplierMap = {};
+    for (const p of monthPurchases) {
+      const sup = (p.supplier || '').trim();
+      if (!sup) continue;
+      for (const item of (p.items || [])) {
+        if (!item.articleId || !(item.pricePerMasterUnit > 0) || !(item.convertedQty > 0)) continue;
+        if (!artSupplierMap[item.articleId]) artSupplierMap[item.articleId] = {};
+        if (!artSupplierMap[item.articleId][sup]) artSupplierMap[item.articleId][sup] = { tv: 0, tq: 0 };
+        artSupplierMap[item.articleId][sup].tv += item.pricePerMasterUnit * item.convertedQty;
+        artSupplierMap[item.articleId][sup].tq += item.convertedQty;
+      }
+    }
+    for (const [artId, supMap] of Object.entries(artSupplierMap)) {
+      const art = articles.find((a) => a.id === artId);
+      if (!art) continue;
+      const sups = Object.entries(supMap)
+        .map(([name, d]) => ({ name, avg: d.tq > 0 ? d.tv / d.tq : 0, qty: d.tq }))
+        .filter((s) => s.avg > 0).sort((a, b) => a.avg - b.avg);
+      if (sups.length < 2) continue;
+      const cheapest = sups[0];
+      const dearest = sups[sups.length - 1];
+      const gapPct = ((dearest.avg - cheapest.avg) / cheapest.avg) * 100;
+      if (gapPct < 15) continue;
+      const saving = dearest.qty * (dearest.avg - cheapest.avg);
+      if (saving < 1) continue;
+      suggestions.push({ type: 'supplier_gap', priority: saving, article: art, cheapest, dearest, gapPct, saving,
+        label: 'Écart fournisseur',
+        detail: `${art.name} : ${dearest.name} à ${formatEuro(dearest.avg)}/${art.unit} vs ${cheapest.name} à ${formatEuro(cheapest.avg)}/${art.unit} (+${gapPct.toFixed(0)}%)`,
+        action: `Privilégier ${cheapest.name} → économie estimée ${formatEuro(saving)} sur la période`,
+      });
+    }
+    // Rule B: price increase vs previous period
+    const avgFor = (ps) => {
+      const map = {};
+      for (const p of ps) for (const item of (p.items || [])) {
+        if (!item.articleId || !(item.pricePerMasterUnit > 0) || !(item.convertedQty > 0)) continue;
+        if (!map[item.articleId]) map[item.articleId] = { tv: 0, tq: 0 };
+        map[item.articleId].tv += item.pricePerMasterUnit * item.convertedQty;
+        map[item.articleId].tq += item.convertedQty;
+      }
+      return Object.fromEntries(Object.entries(map).map(([id, v]) => [id, v.tq > 0 ? v.tv / v.tq : 0]));
+    };
+    const currAvgs = avgFor(monthPurchases);
+    const prevAvgs = avgFor(prevMonthPurchases);
+    for (const [artId, currAvg] of Object.entries(currAvgs)) {
+      const prevAvg = prevAvgs[artId];
+      if (!prevAvg || prevAvg <= 0) continue;
+      const pct = ((currAvg - prevAvg) / prevAvg) * 100;
+      if (pct < 10) continue;
+      const art = articles.find((a) => a.id === artId);
+      if (!art) continue;
+      const artStat = articleStats.find((s) => s.article.id === artId);
+      const extraCost = artStat ? artStat.totalQty * (currAvg - prevAvg) : 0;
+      if (extraCost < 1) continue;
+      suggestions.push({ type: 'price_increase', priority: extraCost, article: art, currAvg, prevAvg, pct, extraCost,
+        label: 'Hausse de prix',
+        detail: `${art.name} : +${pct.toFixed(0)}% vs période précédente (${formatEuro(prevAvg)} → ${formatEuro(currAvg)}/${art.unit})`,
+        action: `Surcoût estimé ${formatEuro(extraCost)} — négocier ou comparer les fournisseurs`,
+      });
+    }
+    return suggestions.sort((a, b) => b.priority - a.priority);
+  }, [monthPurchases, prevMonthPurchases, articles, articleStats]);
 
   const totalMonth = monthPurchases.reduce((s, p) => s + (p.total || 0), 0);
   const totalPrev = prevMonthPurchases.reduce((s, p) => s + (p.total || 0), 0);
@@ -16790,36 +17087,22 @@ function ReportView({ context }) {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
             <span style={{ color: palette.inkSoft }}>Du</span>
-            <input
-              type="date"
-              value={reportFrom}
-              onChange={(e) => setReportFrom(e.target.value)}
-              style={{ padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }}
-            />
+            <input type="date" value={reportFrom} onChange={(e) => setReportFrom(e.target.value)}
+              style={{ padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }} />
             <span style={{ color: palette.inkSoft }}>au</span>
-            <input
-              type="date"
-              value={reportTo}
-              onChange={(e) => setReportTo(e.target.value)}
-              style={{ padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }}
-            />
+            <input type="date" value={reportTo} onChange={(e) => setReportTo(e.target.value)}
+              style={{ padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }} />
             <div style={{ display: 'flex', gap: 4 }}>
               <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
-                onClick={() => { setReportFrom(currentMonthKey + '-01'); setReportTo(today); }}>
-                Ce mois
-              </button>
+                onClick={() => { setReportFrom(currentMonthKey + '-01'); setReportTo(today); }}>Ce mois</button>
               <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
                 onClick={() => {
                   const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
                   setReportFrom(d.toISOString().slice(0, 10));
                   setReportTo(new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10));
-                }}>
-                Mois préc.
-              </button>
+                }}>Mois préc.</button>
               <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
-                onClick={() => { setReportFrom(now.getFullYear() + '-01-01'); setReportTo(today); }}>
-                Cette année
-              </button>
+                onClick={() => { setReportFrom(now.getFullYear() + '-01-01'); setReportTo(today); }}>Cette année</button>
             </div>
           </div>
           <button
@@ -16956,78 +17239,6 @@ function ReportView({ context }) {
           </div>
         </div>
       )}
-
-      {/* Articles detail table */}
-      <div className="mc-card" style={{ padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
-            Achats par article — {reportFrom} → {reportTo}
-          </h3>
-          <div style={{ position: 'relative', minWidth: 240 }}>
-            <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft }} />
-            <input
-              type="text"
-              value={articleSearch}
-              onChange={(e) => setArticleSearch(e.target.value)}
-              placeholder="Rechercher un article…"
-              style={{
-                paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8,
-                border: `1px solid ${palette.rule}`, borderRadius: 6,
-                background: palette.cream, fontFamily: 'inherit', fontSize: 13,
-                width: '100%',
-              }}
-            />
-          </div>
-        </div>
-
-        {filteredArticleStats.length === 0 ? (
-          <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic', padding: '12px 0' }}>
-            {articleSearch ? 'Aucun article ne correspond à cette recherche.' : 'Aucun achat sur cette période.'}
-          </div>
-        ) : (
-          <>
-            <div style={{
-              display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr',
-              padding: '8px 0', fontSize: 11, fontWeight: 600, color: palette.inkSoft,
-              textTransform: 'uppercase', letterSpacing: '0.05em',
-              borderBottom: `1px solid ${palette.rule}`, marginBottom: 4,
-            }}>
-              <div>Article</div>
-              <div style={{ textAlign: 'right' }}>Qté achetée</div>
-              <div style={{ textAlign: 'right' }}>Montant HT</div>
-              <div style={{ textAlign: 'right' }}>Commandes</div>
-            </div>
-            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-              {filteredArticleStats.map(({ article, totalQty, totalAmount, orderCount }) => (
-                <div key={article.id} style={{
-                  display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr',
-                  padding: '10px 0', borderBottom: `1px solid ${palette.rule}`,
-                  fontSize: 13, alignItems: 'center',
-                }}>
-                  <div>
-                    <div style={{ fontWeight: 500, color: palette.ink }}>{article.name}</div>
-                    <div style={{ fontSize: 11, color: palette.inkSoft }}>{article.category}</div>
-                  </div>
-                  <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
-                    {totalQty % 1 === 0 ? totalQty : totalQty.toFixed(2)} {article.unit}
-                  </div>
-                  <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
-                    {formatEuro(totalAmount)}
-                  </div>
-                  <div style={{ textAlign: 'right', color: palette.inkSoft }}>
-                    {orderCount} facture{orderCount > 1 ? 's' : ''}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 10, textAlign: 'right' }}>
-              {filteredArticleStats.length} article{filteredArticleStats.length > 1 ? 's' : ''} ·
-              Total : {formatEuro(filteredArticleStats.reduce((s, e) => s + e.totalAmount, 0))}
-            </div>
-          </>
-        )}
-      </div>
-
 
     </div>
   );
