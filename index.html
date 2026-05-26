@@ -16659,32 +16659,39 @@ function ReportView({ context }) {
 
   const now = new Date();
   const currentMonthKey = now.toISOString().slice(0, 7);
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
+  const firstOfMonth = currentMonthKey + '-01';
+  const today = now.toISOString().slice(0, 10);
+  const [reportFrom, setReportFrom] = useState(firstOfMonth);
+  const [reportTo, setReportTo] = useState(today);
+  const [articleSearch, setArticleSearch] = useState('');
 
-  // Build list of available months from purchases
-  const availableMonths = useMemo(() => {
-    const months = new Set();
-    for (const p of purchases) {
-      const m = (p.date || '').slice(0, 7);
-      if (m) months.add(m);
-    }
-    return [...months].sort((a, b) => b.localeCompare(a)).slice(0, 12);
-  }, [purchases]);
+  // Previous period (same duration, just before)
+  const prevPeriod = useMemo(() => {
+    if (!reportFrom || !reportTo) return { from: '', to: '' };
+    const from = new Date(reportFrom);
+    const to = new Date(reportTo);
+    const durationMs = to - from;
+    const prevTo = new Date(from - 1);
+    const prevFrom = new Date(prevTo - durationMs);
+    return {
+      from: prevFrom.toISOString().slice(0, 10),
+      to: prevTo.toISOString().slice(0, 10),
+    };
+  }, [reportFrom, reportTo]);
 
-  const prevMonth = useMemo(() => {
-    const [y, m] = selectedMonth.split('-').map(Number);
-    const prev = new Date(y, m - 2, 1);
-    return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
-  }, [selectedMonth]);
-
-  // Filter purchases to selected month
   const monthPurchases = useMemo(() =>
-    purchases.filter((p) => (p.date || '').startsWith(selectedMonth)),
-  [purchases, selectedMonth]);
+    purchases.filter((p) => {
+      const d = p.date || '';
+      return (!reportFrom || d >= reportFrom) && (!reportTo || d <= reportTo);
+    }),
+  [purchases, reportFrom, reportTo]);
 
   const prevMonthPurchases = useMemo(() =>
-    purchases.filter((p) => (p.date || '').startsWith(prevMonth)),
-  [purchases, prevMonth]);
+    purchases.filter((p) => {
+      const d = p.date || '';
+      return d >= prevPeriod.from && d <= prevPeriod.to;
+    }),
+  [purchases, prevPeriod]);
 
   // Top 5 most purchased articles (by total €)
   const top5Purchased = useMemo(() => {
@@ -16743,6 +16750,30 @@ function ReportView({ context }) {
     return `${months[parseInt(m, 10) - 1]} ${y}`;
   };
 
+  // All articles stats for the period
+  const articleStats = useMemo(() => {
+    const map = {};
+    for (const p of monthPurchases) {
+      for (const item of (p.items || [])) {
+        if (!item.articleId || !(item.convertedQty > 0)) continue;
+        if (!map[item.articleId]) map[item.articleId] = { totalQty: 0, totalAmount: 0, orderCount: 0 };
+        map[item.articleId].totalQty += item.convertedQty;
+        map[item.articleId].totalAmount += item.total || 0;
+        map[item.articleId].orderCount += 1;
+      }
+    }
+    return Object.entries(map)
+      .map(([id, stats]) => ({ article: articles.find((a) => a.id === id), ...stats }))
+      .filter((e) => e.article)
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [monthPurchases, articles]);
+
+  const filteredArticleStats = useMemo(() => {
+    if (!articleSearch.trim()) return articleStats;
+    const q = articleSearch.toLowerCase();
+    return articleStats.filter((e) => e.article.name.toLowerCase().includes(q));
+  }, [articleStats, articleSearch]);
+
   const totalMonth = monthPurchases.reduce((s, p) => s + (p.total || 0), 0);
   const totalPrev = prevMonthPurchases.reduce((s, p) => s + (p.total || 0), 0);
   const totalEvol = totalPrev > 0 ? ((totalMonth - totalPrev) / totalPrev) * 100 : null;
@@ -16754,19 +16785,43 @@ function ReportView({ context }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Rapport mensuel</h2>
-          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>Le Point de Vue · {monthLabel(selectedMonth)}</div>
+          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>Le Point de Vue · {reportFrom} → {reportTo}</div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            style={{ padding: '8px 12px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }}
-          >
-            <option value={currentMonthKey}>{monthLabel(currentMonthKey)} (en cours)</option>
-            {availableMonths.filter((m) => m !== currentMonthKey).map((m) => (
-              <option key={m} value={m}>{monthLabel(m)}</option>
-            ))}
-          </select>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
+            <span style={{ color: palette.inkSoft }}>Du</span>
+            <input
+              type="date"
+              value={reportFrom}
+              onChange={(e) => setReportFrom(e.target.value)}
+              style={{ padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }}
+            />
+            <span style={{ color: palette.inkSoft }}>au</span>
+            <input
+              type="date"
+              value={reportTo}
+              onChange={(e) => setReportTo(e.target.value)}
+              style={{ padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }}
+            />
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
+                onClick={() => { setReportFrom(currentMonthKey + '-01'); setReportTo(today); }}>
+                Ce mois
+              </button>
+              <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
+                onClick={() => {
+                  const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                  setReportFrom(d.toISOString().slice(0, 10));
+                  setReportTo(new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10));
+                }}>
+                Mois préc.
+              </button>
+              <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
+                onClick={() => { setReportFrom(now.getFullYear() + '-01-01'); setReportTo(today); }}>
+                Cette année
+              </button>
+            </div>
+          </div>
           <button
             className="mc-btn mc-btn-ghost"
             onClick={() => window.print()}
@@ -16792,7 +16847,7 @@ function ReportView({ context }) {
           {totalEvol !== null && (
             <div style={{ fontSize: 13, marginTop: 6, color: totalEvol > 10 ? palette.wine : totalEvol > 0 ? palette.amber : palette.sage, display: 'flex', alignItems: 'center', gap: 4 }}>
               {totalEvol > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-              {totalEvol > 0 ? '+' : ''}{totalEvol.toFixed(1)}% vs {monthLabel(prevMonth)}
+              {totalEvol > 0 ? '+' : ''}{totalEvol.toFixed(1)}% vs période préc.
             </div>
           )}
         </div>
@@ -16845,7 +16900,7 @@ function ReportView({ context }) {
           <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Top 5 hausses de prix</h3>
           {top5PriceIncreases.length === 0 ? (
             <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>
-              Pas de données comparatives{prevMonthPurchases.length === 0 ? ` (aucun achat en ${monthLabel(prevMonth)})` : ' ce mois-ci.'}.
+              Pas de données comparatives{prevMonthPurchases.length === 0 ? ' (aucun achat sur la période précédente)' : ' sur cette période.'}.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -16901,6 +16956,78 @@ function ReportView({ context }) {
           </div>
         </div>
       )}
+
+      {/* Articles detail table */}
+      <div className="mc-card" style={{ padding: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+            Achats par article — {reportFrom} → {reportTo}
+          </h3>
+          <div style={{ position: 'relative', minWidth: 240 }}>
+            <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft }} />
+            <input
+              type="text"
+              value={articleSearch}
+              onChange={(e) => setArticleSearch(e.target.value)}
+              placeholder="Rechercher un article…"
+              style={{
+                paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8,
+                border: `1px solid ${palette.rule}`, borderRadius: 6,
+                background: palette.cream, fontFamily: 'inherit', fontSize: 13,
+                width: '100%',
+              }}
+            />
+          </div>
+        </div>
+
+        {filteredArticleStats.length === 0 ? (
+          <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic', padding: '12px 0' }}>
+            {articleSearch ? 'Aucun article ne correspond à cette recherche.' : 'Aucun achat sur cette période.'}
+          </div>
+        ) : (
+          <>
+            <div style={{
+              display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr',
+              padding: '8px 0', fontSize: 11, fontWeight: 600, color: palette.inkSoft,
+              textTransform: 'uppercase', letterSpacing: '0.05em',
+              borderBottom: `1px solid ${palette.rule}`, marginBottom: 4,
+            }}>
+              <div>Article</div>
+              <div style={{ textAlign: 'right' }}>Qté achetée</div>
+              <div style={{ textAlign: 'right' }}>Montant HT</div>
+              <div style={{ textAlign: 'right' }}>Commandes</div>
+            </div>
+            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+              {filteredArticleStats.map(({ article, totalQty, totalAmount, orderCount }) => (
+                <div key={article.id} style={{
+                  display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr',
+                  padding: '10px 0', borderBottom: `1px solid ${palette.rule}`,
+                  fontSize: 13, alignItems: 'center',
+                }}>
+                  <div>
+                    <div style={{ fontWeight: 500, color: palette.ink }}>{article.name}</div>
+                    <div style={{ fontSize: 11, color: palette.inkSoft }}>{article.category}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
+                    {totalQty % 1 === 0 ? totalQty : totalQty.toFixed(2)} {article.unit}
+                  </div>
+                  <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
+                    {formatEuro(totalAmount)}
+                  </div>
+                  <div style={{ textAlign: 'right', color: palette.inkSoft }}>
+                    {orderCount} facture{orderCount > 1 ? 's' : ''}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 10, textAlign: 'right' }}>
+              {filteredArticleStats.length} article{filteredArticleStats.length > 1 ? 's' : ''} ·
+              Total : {formatEuro(filteredArticleStats.reduce((s, e) => s + e.totalAmount, 0))}
+            </div>
+          </>
+        )}
+      </div>
+
 
     </div>
   );
