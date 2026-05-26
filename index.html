@@ -109,9 +109,6 @@
 
   <script type="text/babel" data-type="module" data-presets="react">
 console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
-console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
-console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
-console.log('[DIAG] 3 — Babel started executing JSX (VIERGE)');
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -335,15 +332,28 @@ function migrateRecipesForPlateCost(recipes) {
 }
 
 const palette = {
+  // ── Fond + texte ──────────────────────────────────────────────────────
   cream: '#FBF8F3',
   paper: '#F5F0E8',
   ink: '#1A1612',
   inkSoft: '#4A413A',
+  rule: '#E8DFD2',
+
+  // ── Couleurs identitaires (palette restaurant chic) ───────────────────
   wine: '#7A1F2B',
   wineLight: '#A8404D',
   sage: '#6B8E6F',
   amber: '#C8923D',
-  rule: '#E8DFD2',
+
+  // ── Couleurs sémantiques (statuts opérationnels) ──────────────────────
+  // Utilisées pour les badges d'état, alertes, et éléments d'UI qui ont
+  // besoin de plus de contraste que la palette identitaire (qui est plus
+  // douce). Définies une seule fois ici pour qu'un futur changement de
+  // marque ne demande pas de chasser des hex dans tout le code.
+  statusOk:     '#5C8A6E',  // vert "en service" — un peu plus saturé que sage
+  statusBroken: '#A03B3B',  // rouge "en panne" — un peu plus saturé que wine
+  statusMuted:  '#7E7E7E',  // gris "hors service / inactif"
+  attention:    '#C4863A',  // jaune-orange pour les avertissements ponctuels
 };
 
 const chartColors = [
@@ -352,8 +362,8 @@ const chartColors = [
   palette.amber,
   palette.inkSoft,
   palette.wineLight,
-  '#8B5A2B',
-  '#2B5A8B',
+  '#8B5A2B',  // marron-cannelle (chart slot 6)
+  '#2B5A8B',  // bleu-acier  (chart slot 7)
 ];
 
 // Les fontes sont préchargées via <link rel="stylesheet"> dans <head> (cf. début
@@ -642,8 +652,23 @@ function detectDuplicate(candidate, existingPurchases) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   PRICING LOGIC
+//   PRICING / STOCK / ALERT HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Trois familles de helpers regroupées ici car elles partagent les mêmes
+// données (purchases / sales / inventories) et le même pattern de mémoïsation
+// par période. Sous-sections (cherche `// ─── X ───` pour naviguer) :
+//
+//   • PRICING                 — getPriceHistory, calculateRecipeCost,
+//                                buildPriceIndex, plate-cost helpers
+//   • STOCK SUMMARY HELPERS   — calculateCurrentStock, computeStockSummary,
+//                                buildOutflowIndex, consumable rates
+//   • ALERT CALCULATION       — saisonnalité, seuils auto, supplier price gaps
+//
+// L'ordre est volontaire : stock dépend de pricing, alerts dépendent
+// de stock — on définit dans l'ordre des dépendances.
+//
+// ─── PRICING ──────────────────────────────────────────────────────────────
 
 /**
  * Returns all purchase entries for a given article (master) within an
@@ -962,7 +987,7 @@ function indexedPlateCostWithOverrides(recipe, priceIndex, assortmentBase, price
   };
 }
 
-// ─── Stock summary helpers ────────────────────────────────────────────────
+// ─── STOCK SUMMARY HELPERS ────────────────────────────────────────────────
 //
 // These functions compute per-article stock data for the Stocks view.
 // They're kept here next to the pricing helpers because they use the same
@@ -1370,7 +1395,7 @@ function computeStockSummary(article, outflowIndex, purchases, inventories, sale
   };
 }
 
-// ─── Alert calculation helpers (step 5A) ──────────────────────────────────
+// ─── ALERT CALCULATION HELPERS ────────────────────────────────────────────
 //
 // These functions support the "Alertes" view. They compute three things:
 //   1. Seasonal consumption rate per article (forward projection)
@@ -1745,9 +1770,9 @@ const ASSET_CATEGORIES = [
 ];
 
 const ASSET_STATUSES = [
-  { id: 'in_service',  label: 'En service',   color: '#5C8A6E' },  // sage
-  { id: 'broken',      label: 'En panne',     color: '#A03B3B' },  // wine
-  { id: 'retired',     label: 'Hors service', color: '#7E7E7E' },
+  { id: 'in_service',  label: 'En service',   color: palette.statusOk },
+  { id: 'broken',      label: 'En panne',     color: palette.statusBroken },
+  { id: 'retired',     label: 'Hors service', color: palette.statusMuted },
 ];
 
 // Périodicité des contrats d'entretien — sert au calcul du coût annualisé
@@ -1781,6 +1806,23 @@ const ALERT_TYPES = {
  */
 const PRICE_TREND_THRESHOLD_PCT = 15; // +15% on rolling 30-day average
 const SUPPLIER_GAP_THRESHOLD_PCT_DEFAULT = 20; // user-adjustable in settings
+
+// Defaults pour alertSettings, regroupés ici pour qu'un futur réglage soit
+// ajouté à un seul endroit (à la fois le défaut et le merge sont géré).
+const DEFAULT_ALERT_SETTINGS = {
+  supplierGapThresholdPct: SUPPLIER_GAP_THRESHOLD_PCT_DEFAULT,
+};
+
+/**
+ * Fusionne les alertSettings chargés du storage avec les défauts. Même
+ * pattern que `mergeUserSettings` : permet d'ajouter de nouveaux réglages
+ * sans casser les utilisateurs existants (le nouveau champ apparaîtra
+ * automatiquement avec sa valeur par défaut).
+ */
+function mergeAlertSettings(loaded) {
+  if (!loaded || typeof loaded !== 'object') return { ...DEFAULT_ALERT_SETTINGS };
+  return { ...DEFAULT_ALERT_SETTINGS, ...loaded };
+}
 
 /**
  * Detect articles where the same product is bought from multiple suppliers
@@ -4105,6 +4147,11 @@ select.mc-input { cursor: pointer; }
 @keyframes mc-pill-pulse { 0%,100% { box-shadow:0 0 0 0 transparent; } 50% { box-shadow:0 0 0 4px rgba(122,31,43,0.10); } }
 .mc-pill-alert { animation: mc-pill-pulse 2.4s ease-in-out infinite; }
 
+@keyframes mc-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* Tooltip de la sidebar : petit fade-in + léger glissement depuis la gauche
    pour suggérer qu'il sort de l'item survolé. */
 @keyframes mc-tooltip-fade-in {
@@ -4114,6 +4161,18 @@ select.mc-input { cursor: pointer; }
 
 .mc-btn { transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 60ms ease; }
 .mc-btn:active:not(:disabled) { transform: scale(0.98); }
+
+/* Touch targets — sur mobile, on remonte les boutons et inputs à 40px de
+   hauteur (cible Apple HIG : 44pt, Material : 48dp ; 40 est un compromis
+   acceptable pour une UI dense de gestion). Sans cette règle les boutons
+   à padding 4-8px sont trop petits pour des doigts en cuisine. */
+@media (max-width: 720px) {
+  .mc-btn  { min-height: 40px; padding: 8px 14px; }
+  .mc-input { min-height: 40px; }
+  /* Cas spécifiques : on garde les pills compacts, leur rôle est informationnel
+     (pas un touch target) — exclure via :not(.mc-pill) si on en met un jour
+     dans un mc-btn nesté. */
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:0.01ms !important; transition-duration:0.01ms !important; }
@@ -4222,19 +4281,73 @@ function PeriodSelector({ period, setPeriod, customFrom, setCustomFrom, customTo
   );
 }
 
-function KpiCard({ label, value, sub, accentColor, icon: Icon }) {
+function KpiCard({ label, value, sub, accentColor, icon: Icon, variant = 'default' }) {
+  const isMobile = useIsMobile(720);
+
+  // ─── Variant 'hero' — KPI principal, taille XL, accent visuel marqué ────
+  if (variant === 'hero') {
+    return (
+      <div
+        className="mc-card"
+        style={{
+          padding: isMobile ? 20 : 28,
+          background: accentColor ? accentColor + '08' : 'white',
+          borderColor: accentColor ? accentColor + '30' : palette.rule,
+          borderWidth: 1.5,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, color: palette.inkSoft }}>
+            {label}
+          </span>
+          {Icon && <Icon size={20} style={{ color: accentColor || palette.inkSoft }} />}
+        </div>
+        <div className="mc-display" style={{ fontSize: isMobile ? 36 : 48, fontWeight: 700, color: accentColor || palette.ink, lineHeight: 1.05 }}>
+          {value}
+        </div>
+        {sub && <div style={{ fontSize: isMobile ? 12 : 13, color: palette.inkSoft, marginTop: 10 }}>{sub}</div>}
+      </div>
+    );
+  }
+
+  // ─── Variant 'compact' — KPI secondaire/contextuel, plus discret ────────
+  if (variant === 'compact') {
+    return (
+      <div
+        className="mc-card"
+        style={{
+          padding: isMobile ? 12 : 14,
+          background: palette.paper + '80',
+          borderColor: palette.rule,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          {Icon && <Icon size={13} style={{ color: accentColor || palette.inkSoft, flexShrink: 0 }} />}
+          <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: palette.inkSoft }}>
+            {label}
+          </span>
+        </div>
+        <div style={{ fontSize: isMobile ? 16 : 18, fontWeight: 600, color: accentColor || palette.ink, lineHeight: 1.1 }}>
+          {value}
+        </div>
+        {sub && <div style={{ fontSize: 10, color: palette.inkSoft, marginTop: 3 }}>{sub}</div>}
+      </div>
+    );
+  }
+
+  // ─── Variant 'default' — KPI standard (taille moyenne) ─────────────────
   return (
-    <div className="mc-card" style={{ padding: 20 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+    <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isMobile ? 8 : 12 }}>
         <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: palette.inkSoft }}>
           {label}
         </span>
         {Icon && <Icon size={16} style={{ color: accentColor || palette.inkSoft }} />}
       </div>
-      <div className="mc-display" style={{ fontSize: 28, fontWeight: 700, color: accentColor || palette.ink }}>
+      <div className="mc-display" style={{ fontSize: isMobile ? 20 : 28, fontWeight: 700, color: accentColor || palette.ink, lineHeight: 1.1 }}>
         {value}
       </div>
-      {sub && <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 6 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: isMobile ? 11 : 12, color: palette.inkSoft, marginTop: 6 }}>{sub}</div>}
     </div>
   );
 }
@@ -4265,6 +4378,158 @@ function InfoBanner({ icon: Icon, color, children }) {
  *
  * Class component because Error Boundaries don't have a hooks API yet.
  */
+// ─── SegmentedToggle ──────────────────────────────────────────────────────
+//
+// Sélecteur en mode segmenté (style iOS) pour basculer entre 2-4 vues. Utilisé
+// p.ex. dans RecipesView (Recettes | Menus) et EquipmentView (Petit | Gros).
+//
+// Props :
+//   options   : [{ id: string, label: ReactNode }]  — 2 à 4 segments
+//   value     : id du segment actif
+//   onChange  : (id) => void
+//   align     : 'start' (défaut) | 'center' | 'end' — alignement horizontal
+//   size      : 'md' (défaut) | 'sm' — réduit padding/font pour usages compacts
+//
+// L'implémentation est volontairement plate (boutons, pas de input radio),
+// car les segments n'ont pas vocation à être inclus dans un formulaire HTML.
+
+function SegmentedToggle({ options, value, onChange, align = 'start', size = 'md' }) {
+  const padding = size === 'sm' ? '6px 12px' : '8px 16px';
+  const fontSize = size === 'sm' ? 12 : 13;
+  const alignSelf = align === 'center' ? 'center' : align === 'end' ? 'flex-end' : 'flex-start';
+
+  return (
+    <div style={{
+      display: 'inline-flex',
+      alignSelf,
+      background: palette.paper,
+      border: `1px solid ${palette.rule}`,
+      borderRadius: 8,
+      padding: 3,
+      gap: 2,
+    }}>
+      {options.map((opt) => {
+        const active = value === opt.id;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => onChange(opt.id)}
+            style={{
+              padding,
+              background: active ? palette.cream : 'transparent',
+              border: 'none',
+              borderRadius: 6,
+              color: active ? palette.wine : palette.inkSoft,
+              fontWeight: active ? 600 : 400,
+              cursor: 'pointer',
+              fontSize,
+              boxShadow: active ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+              fontFamily: 'inherit',
+              transition: 'background 140ms ease, color 140ms ease',
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── EmptyState ───────────────────────────────────────────────────────────
+//
+// État vide unifié : utilisé partout où une liste/section est vide. Centralise
+// le pattern "carte grise + message + (optionnel) icône + (optionnel) CTA"
+// répété ~10 fois dans l'app avec des styles légèrement différents.
+//
+// Props :
+//   icon        : composant lucide-react (ex: Package) — optionnel
+//   title       : message principal (ex: "Aucun menu")
+//   description : ligne secondaire (ex: 'Cliquez sur "Nouveau menu" pour commencer')
+//   action      : { label, onClick } — bouton CTA optionnel
+//   compact     : true pour un rendu inline plus discret (inline-block, padding réduit)
+
+function EmptyState({ icon: Icon, title, description, action, compact = false }) {
+  if (compact) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: 6, fontSize: 11, color: palette.inkSoft,
+      }}>
+        {Icon && <Icon size={14} style={{ flexShrink: 0, opacity: 0.6 }} />}
+        <span>{title}</span>
+      </div>
+    );
+  }
+  return (
+    <div
+      className="mc-card"
+      style={{
+        padding: 32, textAlign: 'center', color: palette.inkSoft,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+      }}
+    >
+      {Icon && (
+        <div style={{
+          width: 44, height: 44, borderRadius: 999,
+          background: palette.paper, display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Icon size={20} style={{ color: palette.inkSoft }} />
+        </div>
+      )}
+      <div style={{ fontSize: 14, fontWeight: 600, color: palette.ink }}>
+        {title}
+      </div>
+      {description && (
+        <div style={{ fontSize: 13, color: palette.inkSoft, maxWidth: 380, lineHeight: 1.5 }}>
+          {description}
+        </div>
+      )}
+      {action && (
+        <button
+          onClick={action.onClick}
+          className="mc-btn mc-btn-primary"
+          style={{ marginTop: 4 }}
+        >
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Skeleton ─────────────────────────────────────────────────────────────
+//
+// Bloc gris animé qui occupe l'espace pendant un chargement. Préférable à
+// un spinner pour le perçu : l'utilisateur voit déjà la structure de la page,
+// pas juste un blanc + cercle qui tourne.
+//
+// Props :
+//   width   : largeur (ex: '100%', 200) — défaut '100%'
+//   height  : hauteur (ex: 16, 60) — défaut 14
+//   radius  : border-radius — défaut 4 (8 pour cards, 999 pour pills)
+//   block   : true → display:block + margin top, sinon inline-block
+
+function Skeleton({ width = '100%', height = 14, radius = 4, block = false, style = {} }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: block ? 'block' : 'inline-block',
+        width, height, borderRadius: radius,
+        background: `linear-gradient(90deg, ${palette.paper} 0%, ${palette.rule} 50%, ${palette.paper} 100%)`,
+        backgroundSize: '200% 100%',
+        animation: 'mc-skeleton-shimmer 1.4s ease-in-out infinite',
+        ...style,
+      }}
+    />
+  );
+}
+
+// ─── ErrorBoundary ────────────────────────────────────────────────────────
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -4288,27 +4553,27 @@ class ErrorBoundary extends React.Component {
       <div style={{
         padding: 32, maxWidth: 800, margin: '64px auto', fontFamily: 'system-ui, sans-serif',
       }}>
-        <h2 style={{ color: '#7A1F2B', margin: '0 0 16px' }}>
+        <h2 style={{ color: palette.wine, margin: '0 0 16px' }}>
           Erreur dans l'application
         </h2>
-        <p style={{ fontSize: 14, color: '#4A413A' }}>
+        <p style={{ fontSize: 14, color: palette.inkSoft }}>
           La Tambouille a rencontré un problème pendant l'affichage. Les détails
           techniques ci-dessous aident à diagnostiquer.
         </p>
         <pre style={{
-          background: '#F5F0E8', padding: 16, borderRadius: 6, fontSize: 12,
-          overflow: 'auto', marginTop: 16, color: '#7A1F2B', fontWeight: 600,
+          background: palette.paper, padding: 16, borderRadius: 6, fontSize: 12,
+          overflow: 'auto', marginTop: 16, color: palette.wine, fontWeight: 600,
         }}>
           {this.state.error.message || String(this.state.error)}
         </pre>
         {this.state.info && (
           <details style={{ marginTop: 16, fontSize: 11 }}>
-            <summary style={{ cursor: 'pointer', color: '#4A413A' }}>
+            <summary style={{ cursor: 'pointer', color: palette.inkSoft }}>
               Pile d'appels (component stack)
             </summary>
             <pre style={{
-              background: '#F5F0E8', padding: 12, borderRadius: 6,
-              overflow: 'auto', marginTop: 8, color: '#4A413A',
+              background: palette.paper, padding: 12, borderRadius: 6,
+              overflow: 'auto', marginTop: 8, color: palette.inkSoft,
             }}>
               {this.state.info.componentStack}
             </pre>
@@ -4318,7 +4583,7 @@ class ErrorBoundary extends React.Component {
           <button
             onClick={() => window.location.reload()}
             style={{
-              padding: '10px 18px', background: '#7A1F2B', color: '#FBF8F3',
+              padding: '10px 18px', background: palette.wine, color: palette.cream,
               border: 'none', borderRadius: 6, cursor: 'pointer',
               fontSize: 13, fontWeight: 600,
             }}
@@ -4328,8 +4593,8 @@ class ErrorBoundary extends React.Component {
           <button
             onClick={() => this.setState({ error: null, info: null })}
             style={{
-              padding: '10px 18px', background: 'transparent', color: '#4A413A',
-              border: '1px solid #E8DFD2', borderRadius: 6, cursor: 'pointer',
+              padding: '10px 18px', background: 'transparent', color: palette.inkSoft,
+              border: `1px solid ${palette.rule}`, borderRadius: 6, cursor: 'pointer',
               fontSize: 13,
             }}
           >
@@ -5373,8 +5638,13 @@ function CommandPalette({ isOpen, onClose, articles, recipes, setActiveTab }) {
 const SIDEBAR_SECTIONS = [
   { id: 'home',      label: null,         items: ['dashboard'] },
   { id: 'quotidien', label: 'Quotidien',  items: ['articles', 'recipes', 'purchases', 'stocks', 'alerts', 'sales', 'energy', 'equipment'] },
-  { id: 'pilotage',  label: 'Pilotage',   items: ['report', 'analytics', 'simulator', 'settings'] },
+  { id: 'pilotage',  label: 'Pilotage',   items: ['report', 'analytics', 'simulator'] },
 ];
+
+// 'settings' est volontairement absent des sections : c'est un onglet rare
+// (configuré ~1× par mois), on l'affiche dans un footer dédié pour ne pas
+// occuper un slot de la nav principale. Voir le rendu plus bas dans Sidebar.
+const SIDEBAR_FOOTER_TABS = ['settings'];
 
 function Sidebar({
   tabs,
@@ -5693,6 +5963,29 @@ function Sidebar({
         ))}
       </nav>
 
+      {/* Footer "réglages" : onglets rares qu'on sort de la nav principale */}
+      <div style={{
+        padding: effectiveCollapsed ? '6px 6px 0' : '6px 10px 0',
+        borderTop: `1px solid ${palette.rule}`,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        flexShrink: 0,
+      }}>
+        {SIDEBAR_FOOTER_TABS
+          .map((id) => tabById[id])
+          .filter(Boolean)
+          .map((tab) => (
+            <SidebarItem
+              key={tab.id}
+              id={tab.id}
+              label={tab.label}
+              icon={tab.icon}
+              locked={tab.locked}
+            />
+          ))}
+      </div>
+
       {/* Footer : bouton replier/déplier (desktop uniquement) */}
       {!isMobile && (
         <div style={{
@@ -5818,9 +6111,7 @@ export default function LaTambouille() {
   const [assets, setAssets] = useState([]);
   const [assetMaintenance, setAssetMaintenance] = useState([]);
   const [assetInterventions, setAssetInterventions] = useState([]);
-  const [alertSettings, setAlertSettings] = useState({
-    supplierGapThresholdPct: SUPPLIER_GAP_THRESHOLD_PCT_DEFAULT,
-  });
+  const [alertSettings, setAlertSettings] = useState(() => mergeAlertSettings(null));
   // Réglages utilisateur : catégories personnalisées + seuils paramétrables.
   // Initialisés aux défauts ; remplacés au boot s'il existe une version
   // sauvegardée dans le storage.
@@ -5856,7 +6147,7 @@ export default function LaTambouille() {
     if (Array.isArray(envelope.assets))               setAssets(envelope.assets);
     if (Array.isArray(envelope.assetMaintenance))     setAssetMaintenance(envelope.assetMaintenance);
     if (Array.isArray(envelope.assetInterventions))   setAssetInterventions(envelope.assetInterventions);
-    if (envelope.alertSettings && typeof envelope.alertSettings === 'object') setAlertSettings(envelope.alertSettings);
+    if (envelope.alertSettings && typeof envelope.alertSettings === 'object') setAlertSettings(mergeAlertSettings(envelope.alertSettings));
   }, []);
 
   const driveSync = useDriveSync({
@@ -5900,7 +6191,7 @@ export default function LaTambouille() {
           setAssets(loadedAssets);
           setAssetMaintenance(loadedAssetMaintenance);
           setAssetInterventions(loadedAssetInterventions);
-          if (loadedAlertSettings) setAlertSettings(loadedAlertSettings);
+          if (loadedAlertSettings) setAlertSettings(mergeAlertSettings(loadedAlertSettings));
           // Chargement des réglages utilisateur (avec fallback sur défauts)
           const loadedUserSettings = await storageGet(STORAGE_KEYS.userSettings, null);
           setUserSettings(mergeUserSettings(loadedUserSettings));
@@ -6415,6 +6706,7 @@ function Phase1LockScreen({ viewName, onGoToSales }) {
 
 function DashboardView({ context }) {
   const { articles, recipes, purchases, sales, energy, priceIndex, dateFrom, dateTo, alertsIndex, equipmentPurchases, assetMaintenance, assetInterventions } = context;
+  const isMobile = useIsMobile(720);
 
   // Find the global assortment base once, then build a map of plate cost per recipe.
   // "Plate cost" = recipe cost ÷ yield portions + (assortment cost if includesAssortment).
@@ -6558,18 +6850,49 @@ function DashboardView({ context }) {
     stats.foodCostRatio < 0.35 ? palette.amber : palette.wine;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? 16 : 20 }}>
+
+      {/* ─── HERO : Food cost — la métrique #1 du restaurant ─────────────── */}
+      <KpiCard
+        variant="hero"
+        label="Food cost"
+        value={formatPercent(stats.foodCostRatio)}
+        sub={stats.foodCostRatio < 0.30
+          ? `✓ Sous 30 % · Sain (sur ${stats.dishesSold} plats vendus)`
+          : stats.foodCostRatio < 0.35
+            ? `Entre 30 et 35 % · à surveiller (sur ${stats.dishesSold} plats vendus)`
+            : `⚠ Au-dessus de 35 % · marges sous pression (sur ${stats.dishesSold} plats vendus)`}
+        accentColor={foodCostColor}
+      />
+
+      {/* ─── Secondaires : volume d'activité + coûts directs ─────────────── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: isMobile
+          ? 'repeat(2, 1fr)'
+          : 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: isMobile ? 10 : 16,
+      }}>
         <KpiCard label="Chiffre d'affaires" value={formatEuro(stats.totalRevenue)} sub={`${stats.dishesSold} plats vendus`} accentColor={palette.ink} />
-        <KpiCard label="Coût matière" value={formatEuro(stats.totalFoodCost)} sub="Coût théorique des plats vendus" />
-        <KpiCard label="Food cost" value={formatPercent(stats.foodCostRatio)} sub={stats.foodCostRatio < 0.30 ? '✓ Sous 30 %' : '⚠ Au-dessus de 30 %'} accentColor={foodCostColor} />
+        <KpiCard label="Coût matière" value={formatEuro(stats.totalFoodCost)} sub="Théorique selon recettes" />
         <KpiCard label="Achats alimentaires" value={formatEuro(stats.purchasesFood)} sub={`${purchases.length} factures`} />
-        <KpiCard label="Achats consommables" value={formatEuro(stats.purchasesConsumable)} sub="Hors alimentaire" accentColor={palette.amber} />
-        <KpiCard label="Énergie" value={formatEuro(stats.energyTotal)} sub={`${(energy || []).length} facture${(energy || []).length > 1 ? 's' : ''} · TTC`} accentColor={ENERGY_TYPES.electricity.color} />
+      </div>
+
+      {/* ─── Pied : coûts indirects (consommables, énergie, équipement) ─── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: isMobile
+          ? 'repeat(2, 1fr)'
+          : 'repeat(auto-fit, minmax(160px, 1fr))',
+        gap: isMobile ? 8 : 12,
+      }}>
+        <KpiCard variant="compact" label="Consommables" value={formatEuro(stats.purchasesConsumable)} sub="Hors alimentaire" accentColor={palette.amber} />
+        <KpiCard variant="compact" label="Énergie" value={formatEuro(stats.energyTotal)} sub={`${(energy || []).length} facture${(energy || []).length > 1 ? 's' : ''} · TTC`} accentColor={ENERGY_TYPES.electricity.color} />
         <KpiCard
+          variant="compact"
           label="Équipement"
           value={formatEuro(stats.equipmentGrandTotal)}
-          sub={`Vaisselle ${formatEuro(stats.equipmentTotal)} · Entretien ${formatEuro(stats.assetMaintenanceTotal)} · Pannes ${formatEuro(stats.assetInterventionsTotal)}`}
+          sub={`Vaisselle · Entretien · Pannes`}
           accentColor={palette.sage}
         />
       </div>
@@ -7195,7 +7518,7 @@ function ArticleModal({ initial, onSave, onClose, categories }) {
 
   const removeVariant = (index) => {
     if (form.variants.length === 1) {
-      alert('Un article doit avoir au moins une variante.');
+      mcToast.error('Un article doit avoir au moins une variante.');
       return;
     }
     const _snapV = form.variants;
@@ -7567,7 +7890,7 @@ function VariantEditor({ variant, masterUnit, isExpanded, onToggle, onUpdate, on
               </div>
             ))}
             {(variant.aliases || []).length === 0 && (
-              <div style={{ fontSize: 11, color: palette.inkSoft, padding: 6 }}>Aucun alias</div>
+              <EmptyState compact icon={Tag} title="Aucun alias" />
             )}
           </div>
 
@@ -7627,7 +7950,7 @@ function VariantEditor({ variant, masterUnit, isExpanded, onToggle, onUpdate, on
               </div>
             ))}
             {(variant.packagings || []).length === 0 && (
-              <div style={{ fontSize: 11, color: palette.inkSoft, padding: 6 }}>Aucun conditionnement</div>
+              <EmptyState compact icon={Box} title="Aucun conditionnement" />
             )}
           </div>
         </div>
@@ -8683,13 +9006,14 @@ function RecipesView({ context }) {
   const { menus } = context;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div style={{ display: 'inline-flex', alignSelf: 'flex-start', background: palette.paper, border: `1px solid ${palette.rule}`, borderRadius: 8, padding: 3, gap: 2 }}>
-        {[{ id: 'recipes', label: 'Recettes' }, { id: 'menus', label: `Menus${menus.length > 0 ? ' (' + menus.length + ')' : ''}` }].map((tab) => (
-          <button key={tab.id} onClick={() => setMode(tab.id)} style={{ padding: '8px 16px', background: mode === tab.id ? palette.cream : 'transparent', border: 'none', borderRadius: 6, color: mode === tab.id ? palette.wine : palette.inkSoft, fontWeight: mode === tab.id ? 600 : 400, cursor: 'pointer', fontSize: 13, boxShadow: mode === tab.id ? '0 1px 2px rgba(0,0,0,0.05)' : 'none' }}>
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <SegmentedToggle
+        value={mode}
+        onChange={setMode}
+        options={[
+          { id: 'recipes', label: 'Recettes' },
+          { id: 'menus',   label: `Menus${menus.length > 0 ? ' (' + menus.length + ')' : ''}` },
+        ]}
+      />
       {mode === 'recipes' && <RecipesOnlyView context={context} />}
       {mode === 'menus'   && <MenusView context={context} />}
     </div>
@@ -8765,8 +9089,20 @@ function MenusView({ context }) {
         </button>
       </div>
 
-      {recipes.length === 0 && <div className="mc-card" style={{ padding: 32, textAlign: 'center', color: palette.inkSoft }}>Créez d'abord des recettes pour composer des menus.</div>}
-      {recipes.length > 0 && menus.length === 0 && <div className="mc-card" style={{ padding: 32, textAlign: 'center', color: palette.inkSoft }}>Aucun menu. Cliquez sur "Nouveau menu" pour commencer.</div>}
+      {recipes.length === 0 && (
+        <EmptyState
+          icon={FileText}
+          title="Aucune recette à composer"
+          description="Créez d'abord des recettes pour pouvoir les regrouper en menus."
+        />
+      )}
+      {recipes.length > 0 && menus.length === 0 && (
+        <EmptyState
+          icon={Layers}
+          title="Aucun menu"
+          description={'Cliquez sur "Nouveau menu" pour composer entrée + plat + dessert.'}
+        />
+      )}
 
       {menus.map((menu) => {
         const costs = menuCosts(menu);
@@ -9896,8 +10232,23 @@ function DuplicateWarning({ duplicate, forceSave, onForceSave }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   BATCH SCAN MODAL
+//   INVOICE IMPORT FLOWS — Import Claude (copier-coller) + Batch Scan (auto)
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Cette section contient DEUX flux d'import distincts, dans cet ordre :
+//
+//   1. IMPORT CLAUDE FLOW (copier-coller manuel via claude.ai)
+//      - DEFAULT_IMPORT_CLAUDE_PROMPT  : prompt à coller dans claude.ai
+//      - ImportClaudeModal             : modale principale (wizard 2 étapes)
+//      - ImportClaudeInputStep         : étape 1 — saisie du JSON
+//      - ImportClaudeReviewStep        : étape 2 — revue avant import
+//      - ImportClaudeInvoiceRow        : ligne d'une facture dans la revue
+//
+//   2. BATCH SCAN FLOW (scan IA direct des PDF/images, max 10)
+//      - BatchScanModal                : modale principale
+//      - BatchScanItem                 : ligne d'un fichier dans la liste
+//
+// Les deux flux partagent : detectDuplicate, findArticleByLabel, mcToast.
 
 const BATCH_MAX_FILES = 10;
 const BATCH_PARALLELISM = 3;
@@ -9913,7 +10264,7 @@ const BATCH_PARALLELISM = 3;
  *   'ignored'   → user clicked "Ignorer cette facture"
  */
 
-// ─── ImportClaudeModal ────────────────────────────────────────────────────
+// ─── IMPORT CLAUDE FLOW (copier-coller depuis claude.ai) ──────────────────
 //
 // Lets the user import multiple invoices at once via a JSON pasted from
 // Claude.ai. The workflow:
@@ -10917,7 +11268,7 @@ function ImportClaudeReviewStep({
         <SummaryBox
           label="Factures équipement"
           value={summary.equipmentCount || 0}
-          color={summary.equipmentCount > 0 ? '#5C8A6E' : palette.inkSoft}
+          color={summary.equipmentCount > 0 ? palette.statusOk : palette.inkSoft}
         />
         <SummaryBox
           label="Avoirs ignorés"
@@ -10997,13 +11348,13 @@ function ImportClaudeReviewStep({
         if (allNewEquip.length === 0) return null;
         return (
           <section style={{ marginBottom: 20 }}>
-            <h4 className="mc-display" style={{ fontSize: 14, fontWeight: 600, margin: '0 0 8px', color: '#5C8A6E' }}>
+            <h4 className="mc-display" style={{ fontSize: 14, fontWeight: 600, margin: '0 0 8px', color: palette.statusOk }}>
               🔧 Nouveaux articles équipement ({allNewEquip.length})
             </h4>
             <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 12px', lineHeight: 1.5 }}>
               Ajustez le nom et la catégorie, ou liez à un article existant.
             </p>
-            <div style={{ border: '1px solid #5C8A6E40', borderRadius: 8, background: '#5C8A6E06', maxHeight: 320, overflowY: 'auto' }}>
+            <div style={{ border: `1px solid ${palette.statusOk}40`, borderRadius: 8, background: `${palette.statusOk}06`, maxHeight: 320, overflowY: 'auto' }}>
               {allNewEquip.map((ni) => {
                 const linked = equipmentLinks[ni.label];
                 return (
@@ -11498,7 +11849,7 @@ function ImportClaudeInvoiceRow({ invoice, index, included, onToggle, equipmentT
             {isEquipment && (
               <span
                 className="mc-pill"
-                style={{ background: '#5C8A6E20', color: '#5C8A6E', fontWeight: 600 }}
+                style={{ background: `${palette.statusOk}20`, color: palette.statusOk, fontWeight: 600 }}
               >
                 🔧 Équipement
               </span>
@@ -11511,9 +11862,9 @@ function ImportClaudeInvoiceRow({ invoice, index, included, onToggle, equipmentT
                   fontSize: 11,
                   padding: '2px 6px',
                   borderRadius: 4,
-                  border: '1px solid #5C8A6E80',
-                  color: '#5C8A6E',
-                  background: '#5C8A6E10',
+                  border: `1px solid ${palette.statusOk}80`,
+                  color: palette.statusOk,
+                  background: `${palette.statusOk}10`,
                   cursor: 'pointer',
                 }}
               >
@@ -11561,14 +11912,14 @@ function ImportClaudeInvoiceRow({ invoice, index, included, onToggle, equipmentT
 
         {/* Nouveaux articles équipement : créer ou lier */}
         {isEquipment && invoice.newEquipArticles?.length > 0 && (
-          <div style={{ marginTop: 8, fontSize: 11, paddingLeft: 12, borderLeft: '2px solid #C4863A' }}>
-            <div style={{ fontWeight: 600, marginBottom: 6, color: '#C4863A' }}>
+          <div style={{ marginTop: 8, fontSize: 11, paddingLeft: 12, borderLeft: `2px solid ${palette.attention}` }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: palette.attention }}>
               {invoice.newEquipArticles.length} article{invoice.newEquipArticles.length > 1 ? 's' : ''} non reconnu{invoice.newEquipArticles.length > 1 ? 's' : ''} :
             </div>
             {invoice.newEquipArticles.map((ni, i) => {
               const linked = equipmentLinks[ni.label];
               return (
-                <div key={i} style={{ marginBottom: 8, padding: '6px 8px', background: palette.paper, borderRadius: 4, border: '1px solid #C4863A30' }}>
+                <div key={i} style={{ marginBottom: 8, padding: '6px 8px', background: palette.paper, borderRadius: 4, border: `1px solid ${palette.attention}30` }}>
                   <div style={{ color: palette.inkSoft, marginBottom: 4, fontSize: 10 }}>Libellé facture : <strong style={{ color: palette.ink }}>{ni.label}</strong></div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <select
@@ -11613,19 +11964,19 @@ function ImportClaudeInvoiceRow({ invoice, index, included, onToggle, equipmentT
             <div style={{
               marginTop: 8,
               padding: '8px 12px',
-              background: '#A03B3B12',
-              border: '1px solid #A03B3B40',
+              background: `${palette.statusBroken}12`,
+              border: `1px solid ${palette.statusBroken}40`,
               borderRadius: 6,
               fontSize: 11,
             }}>
-              <div style={{ fontWeight: 600, color: '#A03B3B', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div style={{ fontWeight: 600, color: palette.statusBroken, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <AlertCircle size={12} /> {alertItems.length} alerte{alertItems.length > 1 ? 's' : ''} de prix — écart ≥ 30% vs historique
               </div>
               {alertItems.map((it, i) => {
                 const a = it.priceAlert;
                 const isUp = a.deltaPct > 0;
                 return (
-                  <div key={i} style={{ marginTop: 3, color: '#A03B3B', display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                  <div key={i} style={{ marginTop: 3, color: palette.statusBroken, display: 'flex', gap: 6, alignItems: 'baseline' }}>
                     <span style={{ fontWeight: 600 }}>{isUp ? '↑' : '↓'} {Math.abs(a.deltaPct)}%</span>
                     <span style={{ color: '#666' }}>{it.label}</span>
                     <span>—</span>
@@ -12111,6 +12462,8 @@ function analyzeOneInvoice(rawInvoice, idx, articles, existingPurchases, existin
   };
 }
 
+// ─── BATCH SCAN FLOW (scan IA direct des PDF/images, max 10) ──────────────
+
 /**
  * The batch scan modal: drop-zone → list of N files being processed → bulk save.
  *
@@ -12137,12 +12490,15 @@ function BatchScanModal({ articles, existingPurchases, onSavePurchase, onClose }
     });
 
     if (files.length === 0) {
-      alert("Aucun fichier valide. Acceptés : PDF et images.");
+      mcToast.error("Aucun fichier valide. Acceptés : PDF et images.");
       return;
     }
 
     if (files.length > BATCH_MAX_FILES) {
-      alert(`Maximum ${BATCH_MAX_FILES} fichiers par lot. Vous en avez sélectionné ${files.length}. Veuillez en retirer ${files.length - BATCH_MAX_FILES} ou les traiter en plusieurs lots.`);
+      mcToast.error(
+        `Maximum ${BATCH_MAX_FILES} fichiers par lot. Vous en avez sélectionné ${files.length}. Retirez-en ${files.length - BATCH_MAX_FILES} ou faites plusieurs lots.`,
+        { duration: 7000 }
+      );
       return;
     }
 
@@ -14544,7 +14900,13 @@ function SalesView({ context }) {
       });
 
       setSales([...sales, ...newSales]);
-      alert(imported + ' ventes importées' + (unmatched > 0 ? ', ' + unmatched + ' non associées' : ''));
+      if (unmatched > 0) {
+        mcToast.info(`${imported} ventes importées, ${unmatched} non associées (recettes manquantes)`, { duration: 5000 });
+      } else if (imported > 0) {
+        mcToast.success(`${imported} ventes importées`);
+      } else {
+        mcToast.error('Aucune vente importée — vérifiez le format du fichier CLYO');
+      }
     };
     reader.readAsText(file);
   };
@@ -14965,8 +15327,13 @@ function AnalyticsView({ context }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   ENERGY VIEW — Track electricity / gas / water invoices with KPIs
+//   ENERGY — constantes & data model (la vue EnergyView est définie plus bas)
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Ces constantes sont déclarées ici car elles sont aussi consommées par
+// DashboardView (KpiCard énergie) et ImportClaudeInvoiceRow (mapping
+// energyType → couleur/label), définis avant EnergyView. La vue elle-même
+// se trouve plus bas dans le fichier : chercher `function EnergyView`.
 
 /**
  * Data model for an energy invoice:
@@ -14996,72 +15363,32 @@ const ENERGY_TYPES = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   EQUIPMENT VIEW (vaisselle, couverts, verres, ustensiles)
+//   EQUIPMENT — router  [Petit équipement | Gros équipement]
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// Volontairement minimaliste : 3 sections (articles, achats, inventaires).
-// Pas de notion de "casse" ponctuelle — la perte se déduit de l'écart entre
-// deux inventaires physiques.
-
-// ═══════════════════════════════════════════════════════════════════════════
-//   EQUIPMENT VIEW (router) — Petit équipement / Gros équipement
-// ═══════════════════════════════════════════════════════════════════════════
+// Top-level router for the Équipement tab. Deux logiques distinctes derrière
+// la même entrée de navigation :
+//   • SmallEquipmentView  → consommables (assiettes, verres, couverts…)
+//                            suivis par inventaire physique.
+//   • AssetsView          → biens durables (cuisinière, four, frigo…)
+//                            suivis par contrats d'entretien + interventions.
 //
-// Top-level router for the Équipement tab. Two distinct logics behind the same
-// nav entry:
-//   • SmallEquipmentView  → consumables (assiettes, verres, couverts...)
-//                            tracked by physical inventory.
-//   • AssetsView          → durable goods (cuisinière, four, frigo, ...)
-//                            tracked by maintenance contracts & interventions.
+// Note : SmallEquipmentView se trouve plus bas (chercher `function
+// SmallEquipmentView`), regroupée historiquement avec AssetsView.
 
 function EquipmentView({ context }) {
   const [mode, setMode] = useState('small'); // 'small' | 'assets'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* Top-level mode toggle (segmented) */}
-      <div style={{
-        display: 'inline-flex',
-        alignSelf: 'flex-start',
-        background: palette.paper,
-        border: `1px solid ${palette.rule}`,
-        borderRadius: 8,
-        padding: 3,
-        gap: 2,
-      }}>
-        <button
-          onClick={() => setMode('small')}
-          style={{
-            padding: '8px 16px',
-            background: mode === 'small' ? palette.cream : 'transparent',
-            border: 'none',
-            borderRadius: 6,
-            color: mode === 'small' ? palette.wine : palette.inkSoft,
-            fontWeight: mode === 'small' ? 600 : 400,
-            cursor: 'pointer',
-            fontSize: 13,
-            boxShadow: mode === 'small' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
-          }}
-        >
-          Petit équipement
-        </button>
-        <button
-          onClick={() => setMode('assets')}
-          style={{
-            padding: '8px 16px',
-            background: mode === 'assets' ? palette.cream : 'transparent',
-            border: 'none',
-            borderRadius: 6,
-            color: mode === 'assets' ? palette.wine : palette.inkSoft,
-            fontWeight: mode === 'assets' ? 600 : 400,
-            cursor: 'pointer',
-            fontSize: 13,
-            boxShadow: mode === 'assets' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
-          }}
-        >
-          Gros équipement
-        </button>
-      </div>
+      <SegmentedToggle
+        value={mode}
+        onChange={setMode}
+        options={[
+          { id: 'small',  label: 'Petit équipement' },
+          { id: 'assets', label: 'Gros équipement' },
+        ]}
+      />
 
       {mode === 'small' && <SmallEquipmentView context={context} />}
       {mode === 'assets' && <AssetsView context={context} />}
@@ -15677,6 +16004,14 @@ function InterventionEditor({ intv, assets, onSave, onCancel }) {
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   SMALL EQUIPMENT VIEW — petit équipement (vaisselle, verres, couverts…)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Volontairement minimaliste : 3 sections (articles, achats, inventaires).
+// Pas de notion de "casse" ponctuelle — la perte se déduit de l'écart entre
+// deux inventaires physiques.
 
 function SmallEquipmentView({ context }) {
   const {
@@ -17300,6 +17635,14 @@ function ReportView({ context }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//   ENERGY VIEW — factures électricité / gaz / eau avec KPIs et historique
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Constantes associées (GAS_KG_TO_KWH, ENERGY_TYPES) déclarées plus haut
+// dans la section « ENERGY — constantes & data model », car elles sont
+// aussi consommées par DashboardView et ImportClaudeInvoiceRow.
+
 function EnergyView({ context }) {
   const { energy, setEnergy } = context;
 
@@ -17615,11 +17958,11 @@ function EnergyInvoiceModal({ initial, onSave, onClose }) {
 
   const handleSubmit = () => {
     if (!form.supplier.trim()) {
-      window.alert('Le fournisseur est obligatoire.');
+      mcToast.error('Le fournisseur est obligatoire.');
       return;
     }
     if (!form.date) {
-      window.alert('La date est obligatoire.');
+      mcToast.error('La date est obligatoire.');
       return;
     }
     // Numeric coercion: empty string -> 0; user typed value -> float
