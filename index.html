@@ -566,10 +566,21 @@ function formatPercent(ratio) {
   return ((ratio || 0) * 100).toFixed(1).replace('.', ',') + ' %';
 }
 
-function formatShortDate(dateString) {
+/**
+ * Format a YYYY-MM-DD as a short, human-readable French date.
+ *
+ * Default (no options)        → "29 mai"        (for graphes axis labels)
+ * { withYear: true }          → "29 mai 2026"   (for tables, modales, alertes)
+ * { withYear: '2-digit' }     → "29 mai 26"     (compact label si l'espace est rare)
+ */
+function formatShortDate(dateString, { withYear = false } = {}) {
+  const yearOpt = withYear === '2-digit' ? '2-digit'
+                : withYear ? 'numeric'
+                : null;
   return parseLocalDate(dateString).toLocaleDateString('fr-FR', {
     day: '2-digit',
     month: 'short',
+    ...(yearOpt ? { year: yearOpt } : {}),
   });
 }
 
@@ -8151,7 +8162,7 @@ function ArticleDetailModal({ article, purchases, onClose, dateFrom, dateTo }) {
                 const variant = (article.variants || []).find((v) => v.id === entry.variantId);
                 return (
                   <tr key={i} className="mc-row">
-                    <td className="mc-td">{parseLocalDate(entry.date).toLocaleDateString('fr-FR')}</td>
+                    <td className="mc-td">{formatShortDate(entry.date, { withYear: true })}</td>
                     <td className="mc-td" style={{ fontSize: 12 }}>
                       {variant ? variant.name : '—'}
                     </td>
@@ -9753,7 +9764,7 @@ function PurchasesView({ context }) {
           <tbody>
             {visiblePurchases.map((purchase) => (
               <tr key={purchase.id} className="mc-row">
-                <td className="mc-td">{parseLocalDate(purchase.date).toLocaleDateString('fr-FR')}</td>
+                <td className="mc-td">{formatShortDate(purchase.date, { withYear: true })}</td>
                 <td className="mc-td" style={{ fontWeight: 500 }}>{purchase.supplier}</td>
                 <td className="mc-td" style={{ fontSize: 12, color: palette.inkSoft }}>
                   {purchase.invoiceNumber || '—'}
@@ -10191,7 +10202,7 @@ function DuplicateWarning({ duplicate, forceSave, onForceSave }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, fontSize: 13 }}>
           <div>
             <div style={{ color: palette.inkSoft, fontSize: 11 }}>Date</div>
-            <div style={{ fontWeight: 500 }}>{parseLocalDate(match.date).toLocaleDateString('fr-FR')}</div>
+            <div style={{ fontWeight: 500 }}>{formatShortDate(match.date, { withYear: true })}</div>
           </div>
           <div>
             <div style={{ color: palette.inkSoft, fontSize: 11 }}>Fournisseur</div>
@@ -11807,7 +11818,7 @@ function ImportClaudeInvoiceRow({ invoice, index, included, onToggle, equipmentT
               {inv.invoiceNumber && <span style={{ color: palette.inkSoft, fontWeight: 400 }}> · n°{inv.invoiceNumber}</span>}
             </div>
             <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2 }}>
-              {inv.date ? parseLocalDate(inv.date).toLocaleDateString('fr-FR') : 'Date inconnue'}
+              {inv.date ? formatShortDate(inv.date, { withYear: true }) : 'Date inconnue'}
               {isEnergy ? (
                 <>
                   {' · '}{inv.consumption ? inv.consumption + ' ' + energyTypeInfo.unit : 'conso ?'}
@@ -12911,13 +12922,13 @@ function BatchScanItem({ item, articles, onRetry, onIgnore, onManualEdit, onForc
           <span style={{ fontSize: 13, fontWeight: 600, color: config.color }}>{config.label}</span>
           {status === 'success' && result && (
             <span style={{ fontSize: 12, color: palette.inkSoft }}>
-              {result.supplier || '?'} · {parseLocalDate(result.date).toLocaleDateString('fr-FR')} ·{' '}
+              {result.supplier || '?'} · {formatShortDate(result.date, { withYear: true })} ·{' '}
               <strong>{formatEuro(result.total)}</strong> · {result.items.length} ligne{result.items.length > 1 ? 's' : ''}
             </span>
           )}
           {status === 'duplicate' && result && duplicate && (
             <span style={{ fontSize: 12, color: palette.inkSoft }}>
-              {result.supplier} · {parseLocalDate(result.date).toLocaleDateString('fr-FR')} · {formatEuro(result.total)}
+              {result.supplier} · {formatShortDate(result.date, { withYear: true })} · {formatEuro(result.total)}
               {' — '}
               <em>{duplicate.reason}</em>
             </span>
@@ -13465,7 +13476,7 @@ function StockRow({ row }) {
       </td>
       <td className="mc-td" style={{ fontSize: 12, color: palette.inkSoft }}>
         {row.latestInventoryDate
-          ? parseLocalDate(row.latestInventoryDate).toLocaleDateString('fr-FR')
+          ? formatShortDate(row.latestInventoryDate, { withYear: true })
           : 'Jamais'}
       </td>
     </tr>
@@ -14186,7 +14197,7 @@ function InventoryHistorySection({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <span style={{ fontSize: 14, fontWeight: 600 }}>
                     {!isDraft && (isExpanded ? '▾' : '▸')}{' '}
-                    {parseLocalDate(inv.date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}
+                    {formatShortDate(inv.date, { withYear: true })}
                   </span>
                   <span
                     className="mc-pill"
@@ -14981,7 +14992,7 @@ function SalesView({ context }) {
           <tbody>
             {visibleSales.map((sale) => (
               <tr key={sale.id} className="mc-row">
-                <td className="mc-td">{parseLocalDate(sale.date).toLocaleDateString('fr-FR')}</td>
+                <td className="mc-td">{formatShortDate(sale.date, { withYear: true })}</td>
                 <td className="mc-td" style={{ fontWeight: 500 }}>{sale.recipeName}</td>
                 <td className="mc-td">{sale.qty}</td>
                 <td className="mc-td" style={{ fontFamily: 'Fraunces, serif' }}>{formatEuro(sale.revenue)}</td>
@@ -16371,7 +16382,7 @@ function SmallEquipmentView({ context }) {
                           {a.estimatedCurrent}
                           {a.lastInv?.date && (
                             <div style={{ fontSize: 10, color: palette.inkSoft, fontWeight: 400, fontFamily: 'DM Sans, sans-serif', marginTop: 2 }}>
-                              Inv. {formatShortDate(a.lastInv.date)}
+                              Inv. {formatShortDate(a.lastInv.date, { withYear: '2-digit' })}
                             </div>
                           )}
                         </>
@@ -17645,6 +17656,7 @@ function ReportView({ context }) {
 
 function EnergyView({ context }) {
   const { energy, setEnergy } = context;
+  const isMobile = useIsMobile(720);
 
   const [editingInvoice, setEditingInvoice] = useState(null);
   const [typeFilter, setTypeFilter] = useState('all');
@@ -17658,17 +17670,33 @@ function EnergyView({ context }) {
     return list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   }, [energy, typeFilter]);
 
-  // ─── KPIs ───────────────────────────────────────────────────────────────
-  // Compute current-month and last-12-months aggregates per energy type.
+  // ─── Compteur de factures par type (pour les badges du filtre) ─────────
+  const countByType = useMemo(() => {
+    const c = { all: (energy || []).length, electricity: 0, gas: 0, water: 0 };
+    for (const inv of (energy || [])) {
+      if (c[inv.energyType] !== undefined) c[inv.energyType]++;
+    }
+    return c;
+  }, [energy]);
+
+  // ─── KPIs avec comparaison N vs N-1 ─────────────────────────────────────
+  // On calcule en plus du mois en cours + 12 derniers mois :
+  //   • le même mois N-1 (pour comparer "mai 2026 vs mai 2025")
+  //   • les 12 mois précédents (24m→12m ago, pour comparer 12m vs 12m)
   const stats = useMemo(() => {
     const now = new Date();
     const currentMonthKey = now.toISOString().slice(0, 7); // 'YYYY-MM'
+    const lastYearSameMonthKey = `${now.getFullYear() - 1}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const twelveMonthsAgo = new Date(now.getFullYear() - 1, now.getMonth(), 1);
     const twelveMonthsAgoStr = twelveMonthsAgo.toISOString().slice(0, 10);
+    const twentyFourMonthsAgo = new Date(now.getFullYear() - 2, now.getMonth(), 1);
+    const twentyFourMonthsAgoStr = twentyFourMonthsAgo.toISOString().slice(0, 10);
 
     const acc = {
       monthCostTotal: 0,
+      lastYearSameMonthCost: 0,
       yearCostTotal: 0,
+      prevYearCostTotal: 0, // période 24m→12m
       monthConsumption: { electricity: 0, gas: 0, water: 0 },
       yearConsumption: { electricity: 0, gas: 0, water: 0 },
       yearCostByType: { electricity: 0, gas: 0, water: 0 },
@@ -17687,19 +17715,94 @@ function EnergyView({ context }) {
         acc.monthCostTotal += total;
         if (acc.monthConsumption[type] !== undefined) acc.monthConsumption[type] += consKwh;
       }
-      if ((inv.date || '') >= twelveMonthsAgoStr) {
+      if (monthKey === lastYearSameMonthKey) {
+        acc.lastYearSameMonthCost += total;
+      }
+      const date = inv.date || '';
+      if (date >= twelveMonthsAgoStr) {
         acc.yearCostTotal += total;
         if (acc.yearConsumption[type] !== undefined) acc.yearConsumption[type] += consKwh;
         if (acc.yearCostByType[type] !== undefined) acc.yearCostByType[type] += total;
+      } else if (date >= twentyFourMonthsAgoStr) {
+        acc.prevYearCostTotal += total;
       }
     }
 
-    // Average unit price = €/kWh (electricity+gas combined, gas already converted)
+    // Prix moyen €/kWh (électricité + gaz combinés, gaz déjà converti en kWh)
     const totalKwh12m = acc.yearConsumption.electricity + acc.yearConsumption.gas;
     const totalEnergyCost12m = acc.yearCostByType.electricity + acc.yearCostByType.gas;
     acc.avgUnitPriceKwh = totalKwh12m > 0 ? totalEnergyCost12m / totalKwh12m : 0;
 
+    // Deltas N vs N-1
+    acc.monthDeltaPct = acc.lastYearSameMonthCost > 0
+      ? ((acc.monthCostTotal - acc.lastYearSameMonthCost) / acc.lastYearSameMonthCost) * 100
+      : null;
+    acc.yearDeltaPct = acc.prevYearCostTotal > 0
+      ? ((acc.yearCostTotal - acc.prevYearCostTotal) / acc.prevYearCostTotal) * 100
+      : null;
+
     return acc;
+  }, [energy]);
+
+  // ─── Répartition par type pour le donut (12 derniers mois) ──────────────
+  const typeBreakdown = useMemo(() => {
+    const data = [
+      { name: 'Électricité', value: stats.yearCostByType.electricity, color: ENERGY_TYPES.electricity.color },
+      { name: 'Gaz',         value: stats.yearCostByType.gas,         color: ENERGY_TYPES.gas.color },
+      { name: 'Eau',         value: stats.yearCostByType.water,       color: ENERGY_TYPES.water.color },
+    ].filter((d) => d.value > 0);
+    const total = data.reduce((s, d) => s + d.value, 0);
+    return { data, total };
+  }, [stats]);
+
+  // ─── Détection d'anomalie sur les factures ─────────────────────────────
+  // Pour chaque type d'énergie sur les 12 derniers mois, on calcule le coût
+  // moyen par jour. Une facture dont le coût/jour dépasse de +30% la moyenne
+  // de son type est flaggée comme anomalie (badge visible dans la table).
+  // Si pas de période sur la facture, on suppose 30 jours par défaut.
+  const anomalies = useMemo(() => {
+    const now = new Date();
+    const twelveMonthsAgoStr = new Date(now.getFullYear() - 1, now.getMonth(), 1).toISOString().slice(0, 10);
+
+    // Build the avg cost/day per type from the last 12 months
+    const cpdByType = { electricity: [], gas: [], water: [] };
+    for (const inv of (energy || [])) {
+      if ((inv.date || '') < twelveMonthsAgoStr) continue;
+      const type = inv.energyType || 'electricity';
+      const total = inv.totalTTC || inv.totalHT || 0;
+      if (total <= 0 || !cpdByType[type]) continue;
+      let days = 30;
+      if (inv.periodStart && inv.periodEnd) {
+        const d = daysBetween(inv.periodStart, inv.periodEnd);
+        if (d > 0) days = d;
+      }
+      cpdByType[type].push(total / days);
+    }
+
+    const avgByType = {};
+    for (const [type, items] of Object.entries(cpdByType)) {
+      if (items.length < 3) continue; // avoid noise on small samples
+      avgByType[type] = items.reduce((s, x) => s + x, 0) / items.length;
+    }
+
+    // For each invoice, check if it's anomalously expensive vs its type avg
+    const flagged = {};
+    for (const inv of (energy || [])) {
+      const type = inv.energyType || 'electricity';
+      const total = inv.totalTTC || inv.totalHT || 0;
+      if (total <= 0 || !avgByType[type]) continue;
+      let days = 30;
+      if (inv.periodStart && inv.periodEnd) {
+        const d = daysBetween(inv.periodStart, inv.periodEnd);
+        if (d > 0) days = d;
+      }
+      const cpd = total / days;
+      const pct = ((cpd - avgByType[type]) / avgByType[type]) * 100;
+      if (pct > 30) {
+        flagged[inv.id] = { pct: Math.round(pct), cpd, avg: avgByType[type] };
+      }
+    }
+    return flagged;
   }, [energy]);
 
   // ─── Monthly evolution chart data ───────────────────────────────────────
@@ -17748,9 +17851,17 @@ function EnergyView({ context }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: isMobile ? 'flex-start' : 'center',
+        gap: 12,
+        marginBottom: 24,
+        flexDirection: isMobile ? 'column' : 'row',
+      }}>
         <div>
-          <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>
+          <h2 className="mc-display" style={{ fontSize: isMobile ? 20 : 24, fontWeight: 600, margin: 0 }}>
             Énergie
           </h2>
           <p style={{ margin: '4px 0 0', fontSize: 13, color: palette.inkSoft }}>
@@ -17765,166 +17876,254 @@ function EnergyView({ context }) {
         </button>
       </div>
 
-      {/* KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+      {/* KPIs hiérarchisés : 1 hero (coût annuel + delta vs N-1) + 3 secondaires */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? 12 : 16, marginBottom: 24 }}>
         <KpiCard
-          label="Coût mois en cours"
-          value={formatEuro(stats.monthCostTotal)}
-          sub={`${(stats.monthConsumption.electricity + stats.monthConsumption.gas).toFixed(0)} kWh + ${stats.monthConsumption.water.toFixed(0)} m³`}
-        />
-        <KpiCard
-          label="Coût 12 derniers mois"
+          variant="hero"
+          label="Coût énergie · 12 derniers mois"
           value={formatEuro(stats.yearCostTotal)}
-          sub="Total toutes énergies"
-        />
-        <KpiCard
-          label="Conso. 12 derniers mois"
-          value={(stats.yearConsumption.electricity + stats.yearConsumption.gas).toFixed(0) + ' kWh'}
-          sub={`${stats.yearConsumption.water.toFixed(0)} m³ d'eau · gaz converti PCI`}
-        />
-        <KpiCard
-          label="Prix moyen kWh"
-          value={stats.avgUnitPriceKwh > 0 ? stats.avgUnitPriceKwh.toFixed(4) + ' €' : '—'}
-          sub="Élec + gaz (PCI 12.78 kWh/kg)"
           accentColor={palette.amber}
+          sub={
+            stats.yearDeltaPct !== null
+              ? `${stats.yearDeltaPct > 0 ? '↑ +' : stats.yearDeltaPct < 0 ? '↓ ' : '→ '}${stats.yearDeltaPct.toFixed(0)}% vs 12 mois précédents (${formatEuro(stats.prevYearCostTotal)})`
+              : "Pas encore 24 mois d'historique pour comparer"
+          }
+        />
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: isMobile ? 10 : 16,
+        }}>
+          <KpiCard
+            label="Coût mois en cours"
+            value={formatEuro(stats.monthCostTotal)}
+            sub={
+              stats.monthDeltaPct !== null
+                ? `${stats.monthDeltaPct > 0 ? '↑ +' : stats.monthDeltaPct < 0 ? '↓ ' : '→ '}${stats.monthDeltaPct.toFixed(0)}% vs même mois N-1`
+                : "Pas de comparable l'an dernier"
+            }
+          />
+          <KpiCard
+            label="Conso. 12 mois"
+            value={(stats.yearConsumption.electricity + stats.yearConsumption.gas).toFixed(0) + ' kWh'}
+            sub={`${stats.yearConsumption.water.toFixed(0)} m³ d'eau · gaz converti PCI`}
+          />
+          <KpiCard
+            label="Prix moyen kWh"
+            value={stats.avgUnitPriceKwh > 0 ? stats.avgUnitPriceKwh.toFixed(4) + ' €' : '—'}
+            sub="Élec + gaz (PCI 12.78 kWh/kg)"
+          />
+        </div>
+      </div>
+
+      {/* Filtre par type — SegmentedToggle avec compteurs */}
+      <div style={{ marginBottom: 16 }}>
+        <SegmentedToggle
+          value={typeFilter}
+          onChange={setTypeFilter}
+          options={[
+            { id: 'all',         label: `Toutes (${countByType.all})` },
+            { id: 'electricity', label: `Élec.${countByType.electricity ? ' (' + countByType.electricity + ')' : ''}` },
+            { id: 'gas',         label: `Gaz${countByType.gas ? ' (' + countByType.gas + ')' : ''}` },
+            { id: 'water',       label: `Eau${countByType.water ? ' (' + countByType.water + ')' : ''}` },
+          ]}
         />
       </div>
 
-      {/* Type filter */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: palette.inkSoft }}>Filtrer :</span>
-        {[
-          { id: 'all', label: 'Toutes' },
-          { id: 'electricity', label: 'Électricité' },
-          { id: 'gas', label: 'Gaz' },
-          { id: 'water', label: 'Eau' },
-        ].map((opt) => (
-          <button
-            key={opt.id}
-            onClick={() => setTypeFilter(opt.id)}
-            style={{
-              padding: '6px 12px',
-              fontSize: 12,
-              fontWeight: 600,
-              borderRadius: 6,
-              cursor: 'pointer',
-              fontFamily: 'DM Sans, sans-serif',
-              background: typeFilter === opt.id ? palette.wine : 'transparent',
-              color: typeFilter === opt.id ? '#fff' : palette.inkSoft,
-              border: '1px solid ' + (typeFilter === opt.id ? palette.wine : palette.rule),
-            }}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Monthly evolution chart */}
+      {/* Ligne de graphiques : évolution mensuelle + donut de répartition */}
       {(energy || []).length > 0 && (
-        <div className="mc-card" style={{ padding: 20, marginBottom: 24 }}>
-          <h3 className="mc-display" style={{ fontSize: 14, fontWeight: 600, margin: '0 0 16px' }}>
-            Évolution sur 12 mois — {typeFilter === 'all' ? 'toutes énergies' : ENERGY_TYPES[typeFilter]?.label}
-          </h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <ComposedChart data={monthlyData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={palette.rule} />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: palette.inkSoft }} />
-              <YAxis yAxisId="left" tick={{ fontSize: 11, fill: palette.inkSoft }} label={{ value: '€', angle: -90, position: 'insideLeft', fill: palette.inkSoft, fontSize: 11 }} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: palette.inkSoft }} label={{ value: 'kWh / m³', angle: 90, position: 'insideRight', fill: palette.inkSoft, fontSize: 11 }} />
-              <Tooltip
-                formatter={(value, name) => {
-                  if (name === 'Coût') return [formatEuro(value), name];
-                  return [value.toFixed(0), name];
-                }}
-              />
-              <Legend />
-              <Bar yAxisId="left" dataKey="cost" fill={palette.wine} name="Coût" />
-              <Line yAxisId="right" type="monotone" dataKey="consumption" stroke={palette.sage} strokeWidth={2} name="Consommation" dot={{ r: 3 }} />
-            </ComposedChart>
-          </ResponsiveContainer>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr',
+          gap: 16,
+          marginBottom: 24,
+        }}>
+          {/* Évolution mensuelle */}
+          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
+            <h3 className="mc-display" style={{ fontSize: 14, fontWeight: 600, margin: '0 0 16px' }}>
+              Évolution 12 mois — {typeFilter === 'all' ? 'toutes énergies' : ENERGY_TYPES[typeFilter]?.label}
+            </h3>
+            <ResponsiveContainer width="100%" height={isMobile ? 220 : 280}>
+              <ComposedChart data={monthlyData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={palette.rule} />
+                <XAxis dataKey="label" tick={{ fontSize: 11, fill: palette.inkSoft }} />
+                <YAxis yAxisId="left" tick={{ fontSize: 11, fill: palette.inkSoft }} label={{ value: '€', angle: -90, position: 'insideLeft', fill: palette.inkSoft, fontSize: 11 }} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: palette.inkSoft }} label={{ value: 'kWh / m³', angle: 90, position: 'insideRight', fill: palette.inkSoft, fontSize: 11 }} />
+                <Tooltip
+                  formatter={(value, name) => {
+                    if (name === 'Coût') return [formatEuro(value), name];
+                    return [value.toFixed(0), name];
+                  }}
+                />
+                <Legend />
+                <Bar yAxisId="left" dataKey="cost" fill={palette.wine} name="Coût" />
+                <Line yAxisId="right" type="monotone" dataKey="consumption" stroke={palette.sage} strokeWidth={2} name="Consommation" dot={{ r: 3 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Donut de répartition par type */}
+          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
+            <h3 className="mc-display" style={{ fontSize: 14, fontWeight: 600, margin: '0 0 16px' }}>
+              Répartition 12 mois
+            </h3>
+            {typeBreakdown.data.length > 0 ? (
+              <>
+                <ResponsiveContainer width="100%" height={isMobile ? 200 : 220}>
+                  <PieChart>
+                    <Pie
+                      data={typeBreakdown.data}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={isMobile ? 40 : 50}
+                      outerRadius={isMobile ? 70 : 85}
+                      paddingAngle={2}
+                      stroke="none"
+                    >
+                      {typeBreakdown.data.map((d) => (
+                        <Cell key={d.name} fill={d.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value) => formatEuro(value)} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {typeBreakdown.data.map((d) => {
+                    const pct = typeBreakdown.total > 0 ? (d.value / typeBreakdown.total) * 100 : 0;
+                    return (
+                      <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width: 10, height: 10, background: d.color, borderRadius: 2 }} />
+                          {d.name}
+                        </span>
+                        <span style={{ color: palette.inkSoft, fontFamily: 'Fraunces, serif' }}>
+                          {pct.toFixed(0)}% · {formatEuro(d.value)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <div style={{ padding: 24, textAlign: 'center', color: palette.inkSoft, fontSize: 13 }}>
+                Aucune dépense énergie cette année.
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Invoices table */}
+      {/* Table des factures */}
       <div className="mc-card" style={{ overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th className="mc-th">Date</th>
-              <th className="mc-th">Fournisseur</th>
-              <th className="mc-th">Type</th>
-              <th className="mc-th">N° facture</th>
-              <th className="mc-th">Période</th>
-              <th className="mc-th" style={{ textAlign: 'right' }}>Consommation</th>
-              <th className="mc-th" style={{ textAlign: 'right' }}>Total HT</th>
-              <th className="mc-th" style={{ textAlign: 'right' }}>Total TTC</th>
-              <th className="mc-th"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredInvoices.length === 0 ? (
-              <tr>
-                <td colSpan="9" style={{ padding: 32, textAlign: 'center', color: palette.inkSoft }}>
-                  {(energy || []).length === 0
-                    ? 'Aucune facture énergie enregistrée. Cliquez sur "Nouvelle facture" pour démarrer.'
-                    : 'Aucune facture ne correspond au filtre.'}
-                </td>
-              </tr>
-            ) : (
-              filteredInvoices.map((inv) => {
-                const typeInfo = ENERGY_TYPES[inv.energyType] || ENERGY_TYPES.electricity;
-                return (
-                  <tr key={inv.id} className="mc-row">
-                    <td className="mc-td" style={{ fontFamily: 'Fraunces, serif' }}>
-                      {formatShortDate(inv.date)}
-                    </td>
-                    <td className="mc-td" style={{ fontWeight: 500 }}>{inv.supplier}</td>
-                    <td className="mc-td">
-                      <span className="mc-pill" style={{ background: typeInfo.color + '20', color: typeInfo.color }}>
-                        {typeInfo.label}
-                      </span>
-                    </td>
-                    <td className="mc-td" style={{ fontSize: 12, color: palette.inkSoft }}>{inv.invoiceNumber || '—'}</td>
-                    <td className="mc-td" style={{ fontSize: 12, color: palette.inkSoft }}>
-                      {inv.periodStart && inv.periodEnd
-                        ? `${formatShortDate(inv.periodStart)} → ${formatShortDate(inv.periodEnd)}`
-                        : '—'}
-                    </td>
-                    <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif' }}>
-                      {inv.consumption
-                        ? inv.energyType === 'gas'
-                          ? `${inv.consumption.toFixed(0)} kg (${(inv.consumption * GAS_KG_TO_KWH).toFixed(0)} kWh)`
-                          : inv.consumption.toFixed(0) + ' ' + typeInfo.unit
-                        : '—'}
-                    </td>
-                    <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif' }}>
-                      {inv.totalHT ? formatEuro(inv.totalHT) : '—'}
-                    </td>
-                    <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
-                      {inv.totalTTC ? formatEuro(inv.totalTTC) : '—'}
-                    </td>
-                    <td className="mc-td" style={{ textAlign: 'right' }}>
-                      <button
-                        onClick={() => setEditingInvoice(inv)}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 4, marginRight: 4 }}
-                        title="Modifier"
-                      >
-                        <Edit3 size={14} color={palette.inkSoft} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(inv.id)}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 4 }}
-                        title="Supprimer"
-                      >
-                        <Trash2 size={14} color={palette.wine} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+        {filteredInvoices.length === 0 ? (
+          (energy || []).length === 0 ? (
+            <EmptyState
+              icon={Zap}
+              title="Aucune facture énergie"
+              description={'Cliquez sur "Nouvelle facture" pour suivre vos consommations d\'électricité, de gaz et d\'eau.'}
+              action={{ label: 'Nouvelle facture', onClick: () => setEditingInvoice({}) }}
+            />
+          ) : (
+            <EmptyState
+              title="Aucune facture ne correspond au filtre"
+              description="Essayez un autre type d'énergie."
+            />
+          )
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead>
+                <tr>
+                  <th className="mc-th">Date</th>
+                  <th className="mc-th">Fournisseur</th>
+                  <th className="mc-th">Type</th>
+                  <th className="mc-th">N° facture</th>
+                  <th className="mc-th">Période</th>
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Consommation</th>
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Total HT</th>
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Total TTC</th>
+                  <th className="mc-th"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredInvoices.map((inv) => {
+                  const typeInfo = ENERGY_TYPES[inv.energyType] || ENERGY_TYPES.electricity;
+                  const anomaly = anomalies[inv.id];
+                  return (
+                    <tr key={inv.id} className="mc-row">
+                      <td className="mc-td" style={{ fontFamily: 'Fraunces, serif' }}>
+                        {formatShortDate(inv.date, { withYear: true })}
+                      </td>
+                      <td className="mc-td" style={{ fontWeight: 500 }}>{inv.supplier}</td>
+                      <td className="mc-td">
+                        <span className="mc-pill" style={{ background: typeInfo.color + '20', color: typeInfo.color }}>
+                          {typeInfo.label}
+                        </span>
+                      </td>
+                      <td className="mc-td" style={{ fontSize: 12, color: palette.inkSoft }}>{inv.invoiceNumber || '—'}</td>
+                      <td className="mc-td" style={{ fontSize: 12, color: palette.inkSoft }}>
+                        {inv.periodStart && inv.periodEnd
+                          ? `${formatShortDate(inv.periodStart, { withYear: true })} → ${formatShortDate(inv.periodEnd, { withYear: true })}`
+                          : '—'}
+                      </td>
+                      <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif' }}>
+                        {inv.consumption
+                          ? inv.energyType === 'gas'
+                            ? `${inv.consumption.toFixed(0)} kg (${(inv.consumption * GAS_KG_TO_KWH).toFixed(0)} kWh)`
+                            : inv.consumption.toFixed(0) + ' ' + typeInfo.unit
+                          : '—'}
+                      </td>
+                      <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif' }}>
+                        {inv.totalHT ? formatEuro(inv.totalHT) : '—'}
+                      </td>
+                      <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+                          {anomaly && (
+                            <span
+                              className="mc-pill"
+                              title={`Coût/jour : ${anomaly.cpd.toFixed(2)}€ · moyenne du type : ${anomaly.avg.toFixed(2)}€/j`}
+                              style={{
+                                background: palette.attention + '20',
+                                color: palette.attention,
+                                fontWeight: 600,
+                                fontSize: 10,
+                                fontFamily: 'DM Sans, sans-serif',
+                              }}
+                            >
+                              ⚠ +{anomaly.pct}%
+                            </span>
+                          )}
+                          {inv.totalTTC ? formatEuro(inv.totalTTC) : '—'}
+                        </div>
+                      </td>
+                      <td className="mc-td" style={{ textAlign: 'right' }}>
+                        <button
+                          onClick={() => setEditingInvoice(inv)}
+                          style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 4, marginRight: 4 }}
+                          title="Modifier"
+                          aria-label="Modifier"
+                        >
+                          <Edit3 size={14} color={palette.inkSoft} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(inv.id)}
+                          style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 4 }}
+                          title="Supprimer"
+                          aria-label="Supprimer"
+                        >
+                          <Trash2 size={14} color={palette.wine} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {editingInvoice !== null && (
@@ -17976,27 +18175,39 @@ function EnergyInvoiceModal({ initial, onSave, onClose }) {
   };
 
   return (
-    <div className="mc-modal-overlay" onClick={onClose}>
-      <div className="mc-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640 }}>
-        <div className="mc-modal-header">
-          <h3 className="mc-display" style={{ margin: 0 }}>
-            {form.id ? 'Modifier la facture énergie' : 'Nouvelle facture énergie'}
-          </h3>
-          <button className="mc-icon-btn" onClick={onClose}><X size={18} /></button>
+    <div className="mc-overlay" onClick={onClose}>
+      <div className="mc-modal" style={{ maxWidth: 640, padding: 28 }} onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+          <div>
+            <h3 className="mc-display" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>
+              {form.id ? 'Modifier la facture énergie' : 'Nouvelle facture énergie'}
+            </h3>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: palette.inkSoft }}>
+              Électricité, gaz ou eau — coût + consommation
+            </p>
+          </div>
+          <button className="mc-btn mc-btn-ghost" onClick={onClose} aria-label="Fermer"><X size={14} /></button>
         </div>
 
-        <div style={{ padding: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        {/* Form grid : 2 cols sur desktop, 1 col sur mobile */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 14,
+        }}>
           {/* Type — full width */}
           <div style={{ gridColumn: '1 / -1' }}>
             <label className="mc-label">Type d'énergie</label>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {Object.entries(ENERGY_TYPES).map(([key, info]) => (
                 <button
                   key={key}
                   type="button"
                   onClick={() => setForm({ ...form, energyType: key })}
                   style={{
-                    flex: 1, padding: '10px 12px', borderRadius: 6, fontSize: 13,
+                    flex: '1 1 100px', minHeight: 40,
+                    padding: '10px 12px', borderRadius: 6, fontSize: 13,
                     fontWeight: 600, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
                     background: form.energyType === key ? info.color + '20' : 'transparent',
                     color: form.energyType === key ? info.color : palette.inkSoft,
@@ -18024,7 +18235,7 @@ function EnergyInvoiceModal({ initial, onSave, onClose }) {
               className="mc-input"
               value={form.supplier}
               onChange={(e) => setForm({ ...form, supplier: e.target.value })}
-              placeholder="EDF, Engie, SME..."
+              placeholder="EDF, Engie, TotalEnergies..."
             />
           </div>
 
@@ -18067,7 +18278,14 @@ function EnergyInvoiceModal({ initial, onSave, onClose }) {
               placeholder="0"
             />
           </div>
-          <div>{/* spacer for grid alignment */}</div>
+          <div>
+            <label className="mc-label">&nbsp;</label>
+            <div style={{ fontSize: 11, color: palette.inkSoft, padding: '8px 0' }}>
+              {form.energyType === 'gas' && form.consumption
+                ? `≈ ${(parseFloat(form.consumption) * GAS_KG_TO_KWH).toFixed(0)} kWh (PCI butane)`
+                : ''}
+            </div>
+          </div>
 
           <div>
             <label className="mc-label">Total HT (€)</label>
@@ -18104,8 +18322,12 @@ function EnergyInvoiceModal({ initial, onSave, onClose }) {
           </div>
         </div>
 
-        <div className="mc-modal-footer">
-          <button className="mc-btn" onClick={onClose}>Annuler</button>
+        {/* Footer */}
+        <div style={{
+          display: 'flex', justifyContent: 'flex-end', gap: 8,
+          marginTop: 24, paddingTop: 16, borderTop: `1px solid ${palette.rule}`,
+        }}>
+          <button className="mc-btn mc-btn-ghost" onClick={onClose}>Annuler</button>
           <button className="mc-btn mc-btn-primary" onClick={handleSubmit}>
             <Save size={16} /> Enregistrer
           </button>
