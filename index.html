@@ -17660,6 +17660,10 @@ function EnergyView({ context }) {
 
   const [editingInvoice, setEditingInvoice] = useState(null);
   const [typeFilter, setTypeFilter] = useState('all');
+  // Fenêtre temporelle DU GRAPHIQUE uniquement. Les KPIs restent à 12 mois
+  // roulants pour rester comparables d'une visite à l'autre.
+  //   '12' / '24' / '36' = nombre de mois ; 'all' = depuis la 1ère facture
+  const [chartPeriod, setChartPeriod] = useState('12');
 
   // ─── Filtering ──────────────────────────────────────────────────────────
   const filteredInvoices = useMemo(() => {
@@ -17806,14 +17810,45 @@ function EnergyView({ context }) {
   }, [energy]);
 
   // ─── Monthly evolution chart data ───────────────────────────────────────
-  // Last 12 months, each as { month: 'YYYY-MM', cost, consumption }
+  // La fenêtre dépend de `chartPeriod` choisi par l'utilisateur :
+  //   '12' / '24' / '36' = N derniers mois
+  //   'all' = depuis le 1er mois ayant une facture (capé à 60 mois pour éviter
+  //           un axe X illisible si l'historique est très long)
   const monthlyData = useMemo(() => {
     const now = new Date();
+    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    // Détermine le nombre de mois à afficher
+    let numMonths;
+    if (chartPeriod === 'all') {
+      // Trouve le mois le plus ancien dans (energy), en respectant le filtre type
+      const earliest = (energy || [])
+        .filter((inv) => typeFilter === 'all' || inv.energyType === typeFilter)
+        .map((inv) => (inv.date || '').slice(0, 7))
+        .filter(Boolean)
+        .sort()[0];
+      if (!earliest) {
+        numMonths = 12; // fallback : pas de facture, on garde 12 mois vides
+      } else {
+        const [y, m] = earliest.split('-').map(Number);
+        const diff = (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m) + 1;
+        numMonths = Math.min(Math.max(diff, 1), 60); // cap dur à 60
+      }
+    } else {
+      numMonths = parseInt(chartPeriod, 10) || 12;
+    }
+
+    // Construit la liste des mois (du plus ancien au plus récent)
     const months = [];
-    for (let i = 11; i >= 0; i--) {
+    for (let i = numMonths - 1; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = d.toISOString().slice(0, 7);
-      const label = d.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' });
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      // Sur une longue fenêtre, l'année est utile pour distinguer les mois
+      const showYear = numMonths > 12;
+      const label = d.toLocaleDateString('fr-FR', {
+        month: 'short',
+        ...(showYear ? { year: '2-digit' } : {}),
+      });
       months.push({ key, label, cost: 0, consumption: 0 });
     }
     const byKey = Object.fromEntries(months.map((m) => [m.key, m]));
@@ -17830,7 +17865,7 @@ function EnergyView({ context }) {
       }
     }
     return months;
-  }, [energy, typeFilter]);
+  }, [energy, typeFilter, chartPeriod]);
 
   // ─── Handlers ───────────────────────────────────────────────────────────
   const handleSave = (data) => {
@@ -17941,9 +17976,29 @@ function EnergyView({ context }) {
         }}>
           {/* Évolution mensuelle */}
           <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
-            <h3 className="mc-display" style={{ fontSize: 14, fontWeight: 600, margin: '0 0 16px' }}>
-              Évolution 12 mois — {typeFilter === 'all' ? 'toutes énergies' : ENERGY_TYPES[typeFilter]?.label}
-            </h3>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: isMobile ? 'flex-start' : 'center',
+              gap: 12,
+              marginBottom: 16,
+              flexDirection: isMobile ? 'column' : 'row',
+            }}>
+              <h3 className="mc-display" style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>
+                Évolution — {typeFilter === 'all' ? 'toutes énergies' : ENERGY_TYPES[typeFilter]?.label}
+              </h3>
+              <SegmentedToggle
+                size="sm"
+                value={chartPeriod}
+                onChange={setChartPeriod}
+                options={[
+                  { id: '12',  label: '12 m' },
+                  { id: '24',  label: '24 m' },
+                  { id: '36',  label: '36 m' },
+                  { id: 'all', label: 'Tout' },
+                ]}
+              />
+            </div>
             <ResponsiveContainer width="100%" height={isMobile ? 220 : 280}>
               <ComposedChart data={monthlyData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={palette.rule} />
