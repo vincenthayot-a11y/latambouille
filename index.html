@@ -7028,6 +7028,60 @@ function DashboardView({ context }) {
   );
 }
 
+// ─── extractBottleCapacityL ───────────────────────────────────────────────
+//
+// Pour les articles "Boissons & alcools" en unité L, déduit la capacité
+// de la bouteille (en litres) à partir du nom ou des labels de variantes,
+// afin d'afficher un prix indicatif par bouteille dans le catalogue.
+//
+// On cherche dans cet ordre :
+//   1. article.name         (ex: "RHUM JM 1L BLANC")
+//   2. variant.label        (première variante avec une capacité)
+//   3. variant.aliases      (premier alias avec une capacité)
+//
+// Retourne null si aucune capacité n'est trouvée.
+//
+// Limites volontaires :
+//   • n'est utilisé QUE pour l'affichage (n'affecte aucun calcul)
+//   • pas de fallback par défaut (ex: "toujours 75cl") pour éviter les
+//     faux positifs sur des articles atypiques (magnums, demi-bouteilles…)
+
+function extractBottleCapacityL(article) {
+  if (article.unit !== 'L') return null;
+  if (article.category !== 'Boissons & alcools') return null;
+
+  // Regex qui détecte les volumes dans un label texte.
+  // Ordre : cL en premier car "75CL" est plus courant que "0.75L"
+  const parseVolume = (str) => {
+    if (typeof str !== 'string' || !str) return null;
+    const s = str.toUpperCase().replace(',', '.');
+    const cl = s.match(/(\d+(?:\.\d+)?)\s*CL\b/);
+    if (cl) return parseFloat(cl[1]) / 100;
+    const ml = s.match(/(\d+(?:\.\d+)?)\s*ML\b/);
+    if (ml) return parseFloat(ml[1]) / 1000;
+    // L mais pas 'LITRE' ni 'L.' (pour éviter "ALCOOL" → faux positif)
+    const l = s.match(/(\d+(?:\.\d+)?)\s*L(?!ITRE|\.)\b/);
+    if (l) return parseFloat(l[1]);
+    return null;
+  };
+
+  // 1. Nom de l'article
+  const fromName = parseVolume(article.name);
+  if (fromName && fromName >= 0.15 && fromName <= 3) return fromName;
+
+  // 2. Noms et aliases des variantes
+  //    (variant a un champ `name` ; alias = objet { label, supplier })
+  for (const v of (article.variants || [])) {
+    const fromName2 = parseVolume(v.name);
+    if (fromName2 && fromName2 >= 0.15 && fromName2 <= 3) return fromName2;
+    for (const alias of (v.aliases || [])) {
+      const fromAlias = parseVolume(alias && alias.label);
+      if (fromAlias && fromAlias >= 0.15 && fromAlias <= 3) return fromAlias;
+    }
+  }
+  return null;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //   ARTICLES VIEW
 // ═══════════════════════════════════════════════════════════════════════════
@@ -7396,6 +7450,19 @@ function ArticlesView({ context }) {
                   </td>
                   <td className="mc-td" style={{ fontWeight: 600, fontFamily: 'Fraunces, serif' }}>
                     {article.avg != null ? formatEuro(article.avg) + '/' + article.unit : '—'}
+                    {(() => {
+                      if (article.avg == null) return null;
+                      const capL = extractBottleCapacityL(article);
+                      if (!capL) return null;
+                      const pricePerBottle = article.avg * capL;
+                      const clLabel = capL >= 1 ? capL.toFixed(2).replace(/\.?0+$/, '') + ' L'
+                                               : Math.round(capL * 100) + ' cl';
+                      return (
+                        <div style={{ fontSize: 11, fontWeight: 400, color: palette.inkSoft, fontFamily: 'DM Sans, sans-serif', marginTop: 2 }}>
+                          ≈ {formatEuro(pricePerBottle)}/btl · {clLabel}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="mc-td">
                     {article.last != null ? (
