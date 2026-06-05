@@ -17921,12 +17921,34 @@ function EnergyView({ context }) {
     const byKey = Object.fromEntries(months.map((m) => [m.key, m]));
 
     for (const inv of (energy || [])) {
-      const key = (inv.date || '').slice(0, 7);
-      if (byKey[key]) {
-        if (typeFilter === 'all' || inv.energyType === typeFilter) {
-          const cons = inv.consumption || 0;
-          const consKwh = inv.energyType === 'gas' ? cons * GAS_KG_TO_KWH : cons;
-          byKey[key].cost += inv.totalTTC || inv.totalHT || 0;
+      if (typeFilter !== 'all' && inv.energyType !== typeFilter) continue;
+      const cons = inv.consumption || 0;
+      const consKwh = inv.energyType === 'gas' ? cons * GAS_KG_TO_KWH : cons;
+      const cost = inv.totalTTC || inv.totalHT || 0;
+
+      if (inv.periodStart && inv.periodEnd) {
+        // Distribute cost and consumption pro-rata across all months covered by the period
+        const pStart = parseLocalDate(inv.periodStart);
+        const pEnd = parseLocalDate(inv.periodEnd);
+        const totalDays = Math.max((pEnd - pStart) / 86400000, 1);
+        let cur = new Date(pStart.getFullYear(), pStart.getMonth(), 1);
+        while (cur <= pEnd) {
+          const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+          if (byKey[key]) {
+            const mStart = new Date(Math.max(cur.getTime(), pStart.getTime()));
+            const nextM = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+            const mEnd = new Date(Math.min(nextM.getTime() - 86400000, pEnd.getTime()));
+            const ratio = ((mEnd - mStart) / 86400000 + 1) / totalDays;
+            byKey[key].cost += cost * ratio;
+            byKey[key].consumption += consKwh * ratio;
+          }
+          cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+        }
+      } else {
+        // Fallback: assign to invoice date month
+        const key = (inv.date || '').slice(0, 7);
+        if (byKey[key]) {
+          byKey[key].cost += cost;
           byKey[key].consumption += consKwh;
         }
       }
@@ -18071,7 +18093,7 @@ function EnergyView({ context }) {
                 <CartesianGrid strokeDasharray="3 3" stroke={palette.rule} />
                 <XAxis dataKey="label" tick={{ fontSize: 11, fill: palette.inkSoft }} />
                 <YAxis yAxisId="left" tick={{ fontSize: 11, fill: palette.inkSoft }} label={{ value: '€', angle: -90, position: 'insideLeft', fill: palette.inkSoft, fontSize: 11 }} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: palette.inkSoft }} label={{ value: 'kWh / m³', angle: 90, position: 'insideRight', fill: palette.inkSoft, fontSize: 11 }} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: palette.inkSoft }} label={{ value: typeFilter === 'water' ? 'm³' : typeFilter === 'gas' ? 'kg' : typeFilter === 'electricity' ? 'kWh' : 'kWh / m³', angle: 90, position: 'insideRight', fill: palette.inkSoft, fontSize: 11 }} />
                 <Tooltip
                   formatter={(value, name) => {
                     if (name === 'Coût') return [formatEuro(value), name];
