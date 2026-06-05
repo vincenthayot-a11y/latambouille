@@ -10838,12 +10838,15 @@ function ImportClaudeModal({ articles, setArticles, existingPurchases, setPurcha
     for (const inv of energyInvoices) {
       const candidate = inv.candidateEnergy;
       if (inv.isDuplicate) {
-        // Find and replace the existing invoice that matched
-        const idx = updatedEnergy.findIndex((e) =>
-          normalizeText(e.supplier) === normalizeText(candidate.supplier) &&
-          normalizeText(e.invoiceNumber) === normalizeText(candidate.invoiceNumber) &&
-          Math.abs((e.totalTTC || 0) - (candidate.totalTTC || 0)) < 0.01
-        );
+        // Find and replace the existing invoice that matched.
+        // Match on same criteria as analyzeEnergyInvoice: same TTC, or
+        // existing ghost (totalTTC=0) with same supplier+invoiceNumber.
+        const idx = updatedEnergy.findIndex((e) => {
+          if (normalizeText(e.supplier) !== normalizeText(candidate.supplier)) return false;
+          if (normalizeText(e.invoiceNumber) !== normalizeText(candidate.invoiceNumber)) return false;
+          const existingTTC = e.totalTTC || 0;
+          return Math.abs(existingTTC - (candidate.totalTTC || 0)) < 0.01 || existingTTC === 0;
+        });
         if (idx >= 0) {
           updatedEnergy[idx] = { ...candidate, id: updatedEnergy[idx].id };
           continue;
@@ -12109,8 +12112,8 @@ function analyzeEnergyInvoice(rawInvoice, idx, existingEnergy) {
     periodStart: rawInvoice.periodStart || '',
     periodEnd: rawInvoice.periodEnd || '',
     consumption: rawInvoice.consumption || 0,
-    totalHT: rawInvoice.totalHT || 0,
-    totalTTC: rawInvoice.totalTTC || rawInvoice.totalHT || 0,
+    totalHT: rawInvoice.totalHT || rawInvoice.total || 0,
+    totalTTC: rawInvoice.totalTTC || rawInvoice.totalHT || rawInvoice.total || 0,
   };
 
   // Validate energy-specific minimum
@@ -12121,16 +12124,25 @@ function analyzeEnergyInvoice(rawInvoice, idx, existingEnergy) {
   }
 
   // Duplicate detection (against existing energy invoices)
+  // Match on supplier + invoiceNumber + totalTTC (within 0.01€).
+  // Special case: if an existing entry has totalTTC=0 (ghost from a bad import
+  // where the supply-format total wasn't mapped), treat it as a duplicate of
+  // any invoice with the same supplier+invoiceNumber regardless of amount, so
+  // the new correct entry overwrites the ghost instead of stacking next to it.
   let isDuplicate = false;
   if (Array.isArray(existingEnergy) && candidate.invoiceNumber) {
     const normSupplier = normalizeText(candidate.supplier);
     const normInvoice = normalizeText(candidate.invoiceNumber);
     for (const existing of existingEnergy) {
       if (normalizeText(existing.supplier) === normSupplier &&
-          normalizeText(existing.invoiceNumber) === normInvoice &&
-          Math.abs((existing.totalTTC || 0) - candidate.totalTTC) < 0.01) {
-        isDuplicate = true;
-        break;
+          normalizeText(existing.invoiceNumber) === normInvoice) {
+        const existingTTC = existing.totalTTC || 0;
+        const sameTTC = Math.abs(existingTTC - candidate.totalTTC) < 0.01;
+        const ghostEntry = existingTTC === 0; // bad previous import
+        if (sameTTC || ghostEntry) {
+          isDuplicate = true;
+          break;
+        }
       }
     }
   }
