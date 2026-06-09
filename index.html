@@ -8798,6 +8798,164 @@ function RecipeStat({ label, value, color }) {
   );
 }
 
+// ─── Tooltip custom (survol) ───────────────────────────────────────────────────
+function InfoTooltip({ text }) {
+  const [show, setShow] = React.useState(false);
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <span
+        onMouseEnter={() => setShow(true)}
+        onMouseLeave={() => setShow(false)}
+        style={{ fontSize: 13, color: palette.inkSoft, cursor: 'help', lineHeight: 1, userSelect: 'none' }}
+      >ⓘ</span>
+      {show && (
+        <div style={{
+          position: 'absolute',
+          bottom: 'calc(100% + 8px)',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: palette.ink,
+          color: palette.cream,
+          padding: '10px 14px',
+          borderRadius: 8,
+          fontSize: 11,
+          lineHeight: 1.6,
+          width: 280,
+          zIndex: 9999,
+          whiteSpace: 'pre-line',
+          pointerEvents: 'none',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+          textTransform: 'none',
+          letterSpacing: 'normal',
+          fontWeight: 400,
+          fontFamily: 'DM Sans, system-ui, sans-serif',
+        }}>
+          {text}
+          <div style={{
+            position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
+            width: 0, height: 0,
+            borderLeft: '6px solid transparent', borderRight: '6px solid transparent',
+            borderTop: '6px solid ' + palette.ink,
+          }} />
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ─── Combobox cherchable pour la sélection d'ingrédients ──────────────────────
+function IngredientCombobox({ value, onChange, articles, priceIndex }) {
+  const [search, setSearch] = React.useState('');
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  const inputRef = React.useRef(null);
+
+  const article = articles.find((a) => a.id === value);
+
+  React.useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+        setSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  React.useEffect(() => {
+    if (open && inputRef.current) inputRef.current.focus();
+  }, [open]);
+
+  const filtered = React.useMemo(() => {
+    const q = search.toLowerCase().trim();
+    return articles
+      .filter((a) => (a.type || 'food') === 'food')
+      .filter((a) => !q || a.name.toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [articles, search]);
+
+  return (
+    <div ref={ref} style={{ flex: 1, position: 'relative' }}>
+      {/* Bouton d'affichage — clique pour ouvrir la recherche */}
+      <button
+        type="button"
+        className="mc-input"
+        style={{
+          width: '100%', textAlign: 'left', cursor: 'pointer',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4,
+        }}
+        onClick={() => { setOpen((o) => !o); setSearch(''); }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+          {article ? article.name : <span style={{ color: palette.inkSoft }}>— choisir —</span>}
+        </span>
+        <span style={{ fontSize: 10, color: palette.inkSoft, flexShrink: 0 }}>▾</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0,
+          background: '#fff', border: '1px solid ' + palette.rule,
+          borderRadius: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.14)',
+          zIndex: 9999, display: 'flex', flexDirection: 'column',
+        }}>
+          {/* Champ de recherche */}
+          <div style={{ padding: '8px 8px 6px', borderBottom: '1px solid ' + palette.rule }}>
+            <input
+              ref={inputRef}
+              className="mc-input"
+              style={{ width: '100%', boxSizing: 'border-box', fontSize: 12 }}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Rechercher un ingrédient…"
+            />
+          </div>
+          {/* Liste filtrée */}
+          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: '10px 12px', fontSize: 12, color: palette.inkSoft }}>Aucun résultat</div>
+            ) : filtered.map((ing) => {
+              const p = indexedAveragePrice(priceIndex, ing.id);
+              const selected = ing.id === value;
+              return (
+                <div
+                  key={ing.id}
+                  onMouseDown={() => { onChange(ing.id); setOpen(false); setSearch(''); }}
+                  style={{
+                    padding: '7px 12px', cursor: 'pointer', fontSize: 12,
+                    background: selected ? palette.wine + '12' : 'transparent',
+                    borderBottom: '1px solid ' + palette.rule + '33',
+                    display: 'flex', justifyContent: 'space-between', gap: 8,
+                  }}
+                  onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = palette.paper; }}
+                  onMouseLeave={(e) => { if (!selected) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <span style={{ fontWeight: selected ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                    {ing.name}
+                    {(ing.variants?.length || 0) > 1 && (
+                      <span style={{ marginLeft: 4, fontSize: 10, color: palette.sage }}>×{ing.variants.length}</span>
+                    )}
+                  </span>
+                  <span style={{ color: palette.inkSoft, flexShrink: 0 }}>
+                    {p != null ? formatEuro(p) : '?'}/{ing.unit}
+                  </span>
+                </div>
+              );
+            })}
+            {filtered.length === 50 && (
+              <div style={{ padding: '5px 12px', fontSize: 10, color: palette.inkSoft, borderTop: '1px solid ' + palette.rule, textAlign: 'center' }}>
+                Affichage limité à 50 — tapez pour affiner
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex }) {
   const [form, setForm] = useState({
     name: initial.name || '',
@@ -8888,12 +9046,7 @@ function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex }
             <div>
               <label className="mc-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 Rendement (portions)
-                <span
-                  title="Combien de portions cette recette donne-t-elle lorsqu'elle est préparée aux quantités saisies ? Saisissez 1 si vous saisissez directement les articles pour une portion."
-                  style={{ fontSize: 10, color: palette.inkSoft, cursor: 'help' }}
-                >
-                  ⓘ
-                </span>
+                <InfoTooltip text={"Combien d'assiettes cette recette produit-elle, telle que saisie ci-dessous ?\n\n• Saisir 20 si la composition correspond à une préparation pour 20 couverts → le coût par portion est divisé par 20.\n• Laisser à 1 si vous saisissez directement les quantités pour une seule assiette."} />
               </label>
               <input
                 type="number"
@@ -8975,17 +9128,12 @@ function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex }
                   marginBottom: 6,
                 }}
               >
-                <select className="mc-input" style={{ flex: 1 }} value={line.id} onChange={(e) => updateLine(index, 'id', e.target.value)}>
-                  {articles.filter((ing) => (ing.type || 'food') === 'food').map((ing) => {
-                    const p = indexedAveragePrice(priceIndex, ing.id);
-                    const vCount = ing.variants?.length || 0;
-                    return (
-                      <option key={ing.id} value={ing.id}>
-                        {ing.name}{vCount > 1 ? ` (${vCount} variantes)` : ''} — {p != null ? formatEuro(p) : '?'}/{ing.unit}
-                      </option>
-                    );
-                  })}
-                </select>
+                <IngredientCombobox
+                  value={line.id}
+                  onChange={(id) => updateLine(index, 'id', id)}
+                  articles={articles}
+                  priceIndex={priceIndex}
+                />
                 {variantCount > 1 && (
                   <span className="mc-pill" style={{ background: palette.sage + '15', color: palette.sage }}>
                     <Layers size={9} />{variantCount}
@@ -10838,15 +10986,12 @@ function ImportClaudeModal({ articles, setArticles, existingPurchases, setPurcha
     for (const inv of energyInvoices) {
       const candidate = inv.candidateEnergy;
       if (inv.isDuplicate) {
-        // Find and replace the existing invoice that matched.
-        // Match on same criteria as analyzeEnergyInvoice: same TTC, or
-        // existing ghost (totalTTC=0) with same supplier+invoiceNumber.
-        const idx = updatedEnergy.findIndex((e) => {
-          if (normalizeText(e.supplier) !== normalizeText(candidate.supplier)) return false;
-          if (normalizeText(e.invoiceNumber) !== normalizeText(candidate.invoiceNumber)) return false;
-          const existingTTC = e.totalTTC || 0;
-          return Math.abs(existingTTC - (candidate.totalTTC || 0)) < 0.01 || existingTTC === 0;
-        });
+        // Find and replace the existing invoice that matched
+        const idx = updatedEnergy.findIndex((e) =>
+          normalizeText(e.supplier) === normalizeText(candidate.supplier) &&
+          normalizeText(e.invoiceNumber) === normalizeText(candidate.invoiceNumber) &&
+          Math.abs((e.totalTTC || 0) - (candidate.totalTTC || 0)) < 0.01
+        );
         if (idx >= 0) {
           updatedEnergy[idx] = { ...candidate, id: updatedEnergy[idx].id };
           continue;
@@ -12112,8 +12257,8 @@ function analyzeEnergyInvoice(rawInvoice, idx, existingEnergy) {
     periodStart: rawInvoice.periodStart || '',
     periodEnd: rawInvoice.periodEnd || '',
     consumption: rawInvoice.consumption || 0,
-    totalHT: rawInvoice.totalHT || rawInvoice.total || 0,
-    totalTTC: rawInvoice.totalTTC || rawInvoice.totalHT || rawInvoice.total || 0,
+    totalHT: rawInvoice.totalHT || 0,
+    totalTTC: rawInvoice.totalTTC || rawInvoice.totalHT || 0,
   };
 
   // Validate energy-specific minimum
@@ -12124,25 +12269,16 @@ function analyzeEnergyInvoice(rawInvoice, idx, existingEnergy) {
   }
 
   // Duplicate detection (against existing energy invoices)
-  // Match on supplier + invoiceNumber + totalTTC (within 0.01€).
-  // Special case: if an existing entry has totalTTC=0 (ghost from a bad import
-  // where the supply-format total wasn't mapped), treat it as a duplicate of
-  // any invoice with the same supplier+invoiceNumber regardless of amount, so
-  // the new correct entry overwrites the ghost instead of stacking next to it.
   let isDuplicate = false;
   if (Array.isArray(existingEnergy) && candidate.invoiceNumber) {
     const normSupplier = normalizeText(candidate.supplier);
     const normInvoice = normalizeText(candidate.invoiceNumber);
     for (const existing of existingEnergy) {
       if (normalizeText(existing.supplier) === normSupplier &&
-          normalizeText(existing.invoiceNumber) === normInvoice) {
-        const existingTTC = existing.totalTTC || 0;
-        const sameTTC = Math.abs(existingTTC - candidate.totalTTC) < 0.01;
-        const ghostEntry = existingTTC === 0; // bad previous import
-        if (sameTTC || ghostEntry) {
-          isDuplicate = true;
-          break;
-        }
+          normalizeText(existing.invoiceNumber) === normInvoice &&
+          Math.abs((existing.totalTTC || 0) - candidate.totalTTC) < 0.01) {
+        isDuplicate = true;
+        break;
       }
     }
   }
