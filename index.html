@@ -143,6 +143,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  Copy,
+  ArrowUpDown,
 } from 'lucide-react';
 import {
   BarChart,
@@ -8600,6 +8602,12 @@ function ArticleMergeModal({
 function RecipesOnlyView({ context }) {
   const { recipes, setRecipes, articles, purchases, priceIndex, dateFrom, dateTo } = context;
   const [editingRecipe, setEditingRecipe] = useState(null);
+  const isMobile = useIsMobile(720);
+
+  // ─── Recherche + tri ──────────────────────────────────────────────────
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('category'); // category | name | margin | foodcost | cost
+  const [catFilter, setCatFilter] = useState('all');
 
   const handleSave = (data) => {
     // Enforce single-base invariant: if user marks this as base, unmark any others
@@ -8623,6 +8631,20 @@ function RecipesOnlyView({ context }) {
     mcToast.undo(`Recette supprimée : ${_recipe.name}`, () => { setRecipes(_snapR); mcToast.success('Annulé'); });
   };
 
+  // Duplique une recette (nouveau nom suffixé, nouvel id, jamais base d'assortiment)
+  const handleDuplicate = (recipe) => {
+    const copy = {
+      ...recipe,
+      id: generateId('r'),
+      name: `${recipe.name} (copie)`,
+      isAssortmentBase: false,
+      articles: (recipe.articles || []).map((a) => ({ ...a })),
+    };
+    setRecipes([...recipes, copy]);
+    mcToast.success(`Recette dupliquée : ${copy.name}`);
+    setEditingRecipe(copy);
+  };
+
   // Split recipes into the assortment base and the rest
   const assortmentBase = useMemo(() => findAssortmentBase(recipes), [recipes]);
   const sellableRecipes = useMemo(
@@ -8630,10 +8652,85 @@ function RecipesOnlyView({ context }) {
     [recipes]
   );
 
+  // ─── Catégories présentes (pour le filtre), dans l'ordre du menu ───────
+  const CATEGORY_ORDER = ['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre'];
+  const presentCategories = useMemo(() => {
+    const set = new Set(sellableRecipes.map((r) => r.category || 'Autre'));
+    return CATEGORY_ORDER.filter((c) => set.has(c));
+  }, [sellableRecipes]);
+
+  // ─── Enrichit chaque recette avec coût/marge/ratio (pour tri + KPIs) ───
+  const enriched = useMemo(() => {
+    return sellableRecipes.map((recipe) => {
+      const breakdown = indexedPlateCost(recipe, priceIndex, assortmentBase);
+      const cost = breakdown.plateCost;
+      const margin = (recipe.salePrice || 0) - cost;
+      const ratio = recipe.salePrice > 0 ? cost / recipe.salePrice : 0;
+      return { recipe, breakdown, cost, margin, ratio };
+    });
+  }, [sellableRecipes, priceIndex, assortmentBase]);
+
+  // ─── KPIs de synthèse ───────────────────────────────────────────────────
+  const kpis = useMemo(() => {
+    const withPrice = enriched.filter((e) => e.recipe.salePrice > 0);
+    const avgRatio = withPrice.length > 0
+      ? withPrice.reduce((s, e) => s + e.ratio, 0) / withPrice.length
+      : 0;
+    const avgMargin = withPrice.length > 0
+      ? withPrice.reduce((s, e) => s + e.margin, 0) / withPrice.length
+      : 0;
+    const overThreshold = withPrice.filter((e) => e.ratio >= 0.35).length;
+    return { count: sellableRecipes.length, avgRatio, avgMargin, overThreshold };
+  }, [enriched, sellableRecipes]);
+
+  // ─── Filtre + tri appliqués ────────────────────────────────────────────
+  const visible = useMemo(() => {
+    const q = normalizeText(searchQuery);
+    let list = enriched.filter((e) => {
+      if (catFilter !== 'all' && (e.recipe.category || 'Autre') !== catFilter) return false;
+      if (q && !normalizeText(e.recipe.name).includes(q) && !normalizeText(e.recipe.category || '').includes(q)) return false;
+      return true;
+    });
+    list = [...list].sort((a, b) => {
+      switch (sortBy) {
+        case 'name':     return a.recipe.name.localeCompare(b.recipe.name);
+        case 'margin':   return b.margin - a.margin;   // marge décroissante
+        case 'foodcost': return b.ratio - a.ratio;     // food cost décroissant (pires en haut)
+        case 'cost':     return b.cost - a.cost;        // coût décroissant
+        case 'category':
+        default: {
+          const ca = CATEGORY_ORDER.indexOf(a.recipe.category || 'Autre');
+          const cb = CATEGORY_ORDER.indexOf(b.recipe.category || 'Autre');
+          if (ca !== cb) return ca - cb;
+          return a.recipe.name.localeCompare(b.recipe.name);
+        }
+      }
+    });
+    return list;
+  }, [enriched, searchQuery, catFilter, sortBy]);
+
+  // Regroupe par catégorie quand le tri est 'category' (sinon liste à plat)
+  const grouped = useMemo(() => {
+    if (sortBy !== 'category') return null;
+    const groups = {};
+    for (const e of visible) {
+      const cat = e.recipe.category || 'Autre';
+      (groups[cat] = groups[cat] || []).push(e);
+    }
+    return CATEGORY_ORDER.filter((c) => groups[c]).map((c) => ({ category: c, items: groups[c] }));
+  }, [visible, sortBy]);
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: isMobile ? 'flex-start' : 'center',
+        gap: 12,
+        marginBottom: 24,
+        flexDirection: isMobile ? 'column' : 'row',
+      }}>
+        <h2 className="mc-display" style={{ fontSize: isMobile ? 20 : 24, fontWeight: 600, margin: 0 }}>
           Recettes & fiches techniques
         </h2>
         <button className="mc-btn mc-btn-primary" onClick={() => setEditingRecipe({ articles: [] })}>
@@ -8669,66 +8766,144 @@ function RecipesOnlyView({ context }) {
         </div>
       )}
 
-      {/* Sellable recipes (plats, entrées, desserts…) */}
+      {/* KPIs de synthèse */}
+      {sellableRecipes.length > 0 && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: isMobile ? 10 : 16,
+          marginBottom: 24,
+        }}>
+          <KpiCard label="Recettes" value={String(kpis.count)} />
+          <KpiCard
+            label="Food cost moyen"
+            value={kpis.avgRatio > 0 ? formatPercent(kpis.avgRatio) : '—'}
+            accentColor={kpis.avgRatio < 0.30 ? palette.sage : kpis.avgRatio < 0.35 ? palette.amber : palette.statusBroken}
+            sub="Sur recettes avec prix"
+          />
+          <KpiCard label="Marge moyenne" value={formatEuro(kpis.avgMargin)} accentColor={palette.sage} />
+          <KpiCard
+            label="À surveiller"
+            value={String(kpis.overThreshold)}
+            accentColor={kpis.overThreshold > 0 ? palette.statusBroken : palette.inkSoft}
+            sub="Food cost ≥ 35 %"
+          />
+        </div>
+      )}
+
+      {/* Sellable recipes */}
       <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 12px' }}>
         Recettes
       </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        {sellableRecipes.map((recipe) => {
-          const breakdown = indexedPlateCost(recipe, priceIndex, assortmentBase);
-          const cost = breakdown.plateCost;
-          const margin = recipe.salePrice - cost;
-          const ratio = recipe.salePrice > 0 ? cost / recipe.salePrice : 0;
-          const yieldPortions = recipe.yieldPortions || 1;
 
-          return (
-            <div key={recipe.id} className="mc-card" style={{ padding: 20, cursor: 'pointer' }} onClick={() => setEditingRecipe(recipe)}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
-                    {recipe.category}
-                    {yieldPortions > 1 && (
-                      <span style={{ marginLeft: 6, color: palette.wine }}>
-                        · {yieldPortions} portions
-                      </span>
-                    )}
-                    {breakdown.includesAssortment && (
-                      <span style={{ marginLeft: 6, color: palette.sage }}>· + assortiment</span>
-                    )}
-                  </div>
-                  <div className="mc-display" style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.2 }}>
-                    {recipe.name}
-                  </div>
-                </div>
-                <button
-                  className="mc-btn mc-btn-danger"
-                  style={{ padding: '4px 8px' }}
-                  onClick={(e) => { e.stopPropagation(); handleDelete(recipe.id); }}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
+      {/* Toolbar recherche + tri + filtre catégorie */}
+      {sellableRecipes.length > 0 && (
+        <div style={{
+          display: 'flex',
+          gap: 10,
+          marginBottom: 20,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+        }}>
+          <div style={{ position: 'relative', flex: isMobile ? '1 1 100%' : '1 1 240px', minWidth: 0 }}>
+            <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft }} />
+            <input
+              className="mc-input"
+              style={{ paddingLeft: 34 }}
+              placeholder="Rechercher une recette…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, paddingTop: 12, borderTop: `1px solid ${palette.rule}` }}>
-                <RecipeStat label="Vente" value={formatEuro(recipe.salePrice)} color={palette.ink} />
-                <RecipeStat
-                  label={breakdown.includesAssortment ? "Coût assiette" : (yieldPortions > 1 ? "Coût/portion" : "Coût")}
-                  value={formatEuro(cost)}
-                  color={palette.wine}
-                />
-                <RecipeStat label="Marge" value={formatEuro(margin)} color={margin >= 0 ? palette.sage : '#E88'} />
-              </div>
+          <SegmentedToggle
+            size="sm"
+            value={catFilter}
+            onChange={setCatFilter}
+            options={[
+              { id: 'all', label: 'Toutes' },
+              ...presentCategories.map((c) => ({ id: c, label: c })),
+            ]}
+          />
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
-                <span style={{ fontSize: 11, color: palette.inkSoft }}>
-                  {(recipe.articles || []).length} articles
-                </span>
-                <StatusPill ratio={ratio} />
-              </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <ArrowUpDown size={14} style={{ color: palette.inkSoft }} />
+            <select
+              className="mc-input"
+              style={{ width: 'auto', paddingTop: 6, paddingBottom: 6 }}
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+            >
+              <option value="category">Par catégorie</option>
+              <option value="name">Nom (A→Z)</option>
+              <option value="margin">Marge (↓)</option>
+              <option value="foodcost">Food cost (↓)</option>
+              <option value="cost">Coût (↓)</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* Liste : groupée par catégorie OU à plat selon le tri */}
+      {sellableRecipes.length === 0 ? (
+        <EmptyState
+          icon={FileText}
+          title="Aucune recette"
+          description="Créez votre première fiche technique pour suivre vos coûts et marges."
+          action={{ label: 'Nouvelle recette', onClick: () => setEditingRecipe({ articles: [] }) }}
+        />
+      ) : visible.length === 0 ? (
+        <EmptyState
+          title="Aucune recette ne correspond"
+          description="Essayez un autre terme ou changez le filtre de catégorie."
+        />
+      ) : grouped ? (
+        // Vue groupée par catégorie
+        grouped.map((group) => (
+          <div key={group.category} style={{ marginBottom: 28 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
+            }}>
+              <h4 className="mc-display" style={{ fontSize: 14, fontWeight: 600, margin: 0, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                {group.category}
+              </h4>
+              <span style={{ fontSize: 12, color: palette.inkSoft }}>· {group.items.length}</span>
             </div>
-          );
-        })}
-      </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: 16,
+            }}>
+              {group.items.map((entry) => (
+                <RecipeCard
+                  key={entry.recipe.id}
+                  entry={entry}
+                  onEdit={() => setEditingRecipe(entry.recipe)}
+                  onDelete={() => handleDelete(entry.recipe.id)}
+                  onDuplicate={() => handleDuplicate(entry.recipe)}
+                />
+              ))}
+            </div>
+          </div>
+        ))
+      ) : (
+        // Vue à plat (triée par marge/coût/nom/food cost)
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: 16,
+        }}>
+          {visible.map((entry) => (
+            <RecipeCard
+              key={entry.recipe.id}
+              entry={entry}
+              onEdit={() => setEditingRecipe(entry.recipe)}
+              onDelete={() => handleDelete(entry.recipe.id)}
+              onDuplicate={() => handleDuplicate(entry.recipe)}
+            />
+          ))}
+        </div>
+      )}
 
       {editingRecipe && (
         <RecipeModal
@@ -8797,6 +8972,72 @@ function RecipeStat({ label, value, color }) {
     </div>
   );
 }
+
+// ─── RecipeCard ─────────────────────────────────────────────────────────────
+// Carte d'une recette vendable. Extraite pour être réutilisée dans la vue
+// groupée par catégorie ET la liste à plat (tri par marge/coût/etc).
+function RecipeCard({ entry, onEdit, onDelete, onDuplicate }) {
+  const { recipe, breakdown, cost, margin, ratio } = entry;
+  const yieldPortions = recipe.yieldPortions || 1;
+  return (
+    <div className="mc-card" style={{ padding: 20, cursor: 'pointer' }} onClick={onEdit}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+            {recipe.category}
+            {yieldPortions > 1 && (
+              <span style={{ marginLeft: 6, color: palette.wine }}>· {yieldPortions} portions</span>
+            )}
+            {breakdown.includesAssortment && (
+              <span style={{ marginLeft: 6, color: palette.sage }}>· + assortiment</span>
+            )}
+          </div>
+          <div className="mc-display" style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.2 }}>
+            {recipe.name}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button
+            className="mc-btn mc-btn-ghost"
+            style={{ padding: '4px 8px' }}
+            title="Dupliquer"
+            aria-label="Dupliquer la recette"
+            onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
+          >
+            <Copy size={14} />
+          </button>
+          <button
+            className="mc-btn mc-btn-danger"
+            style={{ padding: '4px 8px' }}
+            title="Supprimer"
+            aria-label="Supprimer la recette"
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, paddingTop: 12, borderTop: `1px solid ${palette.rule}` }}>
+        <RecipeStat label="Vente" value={formatEuro(recipe.salePrice)} color={palette.ink} />
+        <RecipeStat
+          label={breakdown.includesAssortment ? "Coût assiette" : (yieldPortions > 1 ? "Coût/portion" : "Coût")}
+          value={formatEuro(cost)}
+          color={palette.wine}
+        />
+        <RecipeStat label="Marge" value={formatEuro(margin)} color={margin >= 0 ? palette.sage : palette.statusBroken} />
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
+        <span style={{ fontSize: 11, color: palette.inkSoft }}>
+          {(recipe.articles || []).length} articles
+        </span>
+        <StatusPill ratio={ratio} />
+      </div>
+    </div>
+  );
+}
+
 
 // ─── Tooltip custom (survol) ───────────────────────────────────────────────────
 function InfoTooltip({ text }) {
