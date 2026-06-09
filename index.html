@@ -2127,20 +2127,20 @@ function findArticleByLabel(label, articles) {
     }
   }
 
-  // 2. Variant name match
+  // 2. Variant name match — exact only
   for (const article of articles) {
     for (const variant of article.variants || []) {
       const variantName = normalizeText(variant.name);
-      if (variantName === target || target.includes(variantName) || variantName.includes(target)) {
+      if (variantName === target) {
         return { article, variant };
       }
     }
   }
 
-  // 3. Article master name match → return first variant
+  // 3. Article master name match — exact only → return first variant
   for (const article of articles) {
     const ingName = normalizeText(article.name);
-    if (ingName === target || target.includes(ingName) || ingName.includes(target)) {
+    if (ingName === target) {
       const firstVariant = article.variants?.[0];
       if (firstVariant) return { article, variant: firstVariant };
     }
@@ -9756,7 +9756,7 @@ function PurchasesView({ context }) {
             id: newArticleId,
             name: item.productName,
             unit: item.masterUnit || 'kg',
-            category: item.newArticleCategory || '',
+            category: '',
             variants: [
               {
                 id: newVariantId,
@@ -10368,51 +10368,17 @@ function PurchaseLine({ item, index, articles, onUpdate, onRemove }) {
       )}
 
       {!item.articleId && (item.productName || item.label) && (
-        <div style={{
-          marginTop: 10,
-          padding: '10px 12px',
-          background: palette.sage + '08',
-          border: '1px dashed ' + palette.sage,
-          borderRadius: 6,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-            <Plus size={12} style={{ color: palette.sage, flexShrink: 0 }} />
-            <span style={{ fontSize: 12, fontWeight: 600, color: palette.sage }}>
-              Nouvel article — sera créé à l'enregistrement
-            </span>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 100px 2fr', gap: 8 }}>
-            <div>
-              <div style={{ fontSize: 11, color: palette.inkSoft, marginBottom: 3 }}>Nom</div>
-              <input
-                className="mc-input"
-                placeholder="Nom de l'article"
-                value={item.productName || ''}
-                onChange={(e) => onUpdate(index, 'productName', e.target.value)}
-              />
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: palette.inkSoft, marginBottom: 3 }}>Unité</div>
-              <select
-                className="mc-input"
-                value={item.masterUnit || 'kg'}
-                onChange={(e) => onUpdate(index, 'masterUnit', e.target.value)}
-              >
-                {['kg', 'g', 'L', 'cL', 'pièce', 'botte'].map((u) => <option key={u}>{u}</option>)}
-              </select>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: palette.inkSoft, marginBottom: 3 }}>Catégorie</div>
-              <select
-                className="mc-input"
-                value={item.newArticleCategory || ''}
-                onChange={(e) => onUpdate(index, 'newArticleCategory', e.target.value)}
-              >
-                <option value="">— sans catégorie —</option>
-                {ARTICLE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-          </div>
+        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="mc-pill" style={{ background: palette.amber + '20', color: palette.amber }}>
+            <Plus size={10} /> Nouvel article + variante seront créés
+          </span>
+          <input
+            className="mc-input"
+            style={{ maxWidth: 240 }}
+            placeholder="Nom"
+            value={item.productName || ''}
+            onChange={(e) => onUpdate(index, 'productName', e.target.value)}
+          />
         </div>
       )}
     </div>
