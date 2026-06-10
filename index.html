@@ -875,6 +875,42 @@ function buildPriceIndex(purchases, dateFrom, dateTo) {
 }
 
 /**
+ * Merges a period-filtered price index with an all-time fallback.
+ *
+ * Pour chaque article :
+ *   • Si l'index de période le connaît → on garde ses valeurs (avg, lastPrice…)
+ *   • Sinon, on copie l'entrée all-time avec `isFallback: true` pour que
+ *     l'UI puisse afficher un avertissement ("prix estimé – pas d'achat sur
+ *     cette période").
+ *
+ * Résultat : les recettes ne tombent plus à 0,00€ quand un ingrédient n'a
+ * pas été acheté sur la période sélectionnée (ex: 30J). Le food cost reste
+ * indicatif mais réaliste plutôt que faussement nul.
+ */
+function mergePriceIndexWithFallback(periodIndex, allTimeIndex) {
+  if (!allTimeIndex || !allTimeIndex.master) return periodIndex;
+
+  const master = { ...periodIndex.master };
+  const variant = { ...periodIndex.variant };
+
+  for (const [articleId, allTimeEntry] of Object.entries(allTimeIndex.master)) {
+    if (master[articleId]) continue; // period already has data → skip
+    // Copy all-time entry, flag it so UI can show "pas d'achat récent"
+    master[articleId] = { ...allTimeEntry, isFallback: true };
+  }
+
+  // Same for variant-level entries
+  for (const [articleId, variantMap] of Object.entries(allTimeIndex.variant || {})) {
+    if (variant[articleId]) continue;
+    variant[articleId] = Object.fromEntries(
+      Object.entries(variantMap).map(([vId, e]) => [vId, { ...e, isFallback: true }])
+    );
+  }
+
+  return { master, variant, hasData: periodIndex.hasData || Object.keys(master).length > 0 };
+}
+
+/**
  * O(1) lookup: average price of an article across all variants for the
  * already-built index's period.
  */
@@ -942,23 +978,36 @@ function findAssortmentBase(recipes) {
  * Full cost of a "plate" served to the customer:
  *   plateCost = costPerPortion(recipe) + (recipe.includesAssortment ? assortmentBaseCost : 0)
  *
- * Returns { recipeCost, portionCost, assortmentCost, plateCost, includesAssortment }
- * so the UI can show both numbers and explain how the total is composed.
+ * Returns { recipeCost, portionCost, assortmentCost, plateCost, includesAssortment, hasFallback }
+ * hasFallback=true means at least one ingredient price comes from the all-time
+ * average (not from the currently selected period) — the UI shows a subtle
+ * warning to let the user know the food cost may not reflect current prices.
  */
 function indexedPlateCost(recipe, priceIndex, assortmentBase) {
-  const recipeCost = indexedRecipeCost(recipe, priceIndex);
+  let recipeCost = 0;
+  let hasFallback = false;
+  for (const line of (recipe?.articles || [])) {
+    const entry = priceIndex.master[line.id];
+    if (entry?.avg != null) {
+      recipeCost += entry.avg * line.qty;
+      if (entry.isFallback) hasFallback = true;
+    }
+  }
   const portions = recipe.yieldPortions > 0 ? recipe.yieldPortions : 1;
   const portionCost = recipeCost / portions;
 
   let assortmentCost = 0;
   let includesAssortment = false;
   if (recipe.includesAssortment && assortmentBase) {
-    // The assortment is itself a recipe-like object; its yield is always 1 plate
-    // (it's defined "per plate" by design), but we still divide by its yieldPortions
-    // for safety in case someone sets it to >1.
-    const baseRaw = indexedRecipeCost(assortmentBase, priceIndex);
+    for (const line of (assortmentBase?.articles || [])) {
+      const entry = priceIndex.master[line.id];
+      if (entry?.avg != null) {
+        assortmentCost += entry.avg * line.qty;
+        if (entry.isFallback) hasFallback = true;
+      }
+    }
     const basePortions = assortmentBase.yieldPortions > 0 ? assortmentBase.yieldPortions : 1;
-    assortmentCost = baseRaw / basePortions;
+    assortmentCost = assortmentCost / basePortions;
     includesAssortment = true;
   }
 
@@ -968,6 +1017,7 @@ function indexedPlateCost(recipe, priceIndex, assortmentBase) {
     assortmentCost,
     plateCost: portionCost + assortmentCost,
     includesAssortment,
+    hasFallback,
   };
 }
 
@@ -6311,6 +6361,16 @@ export default function LaTambouille() {
     [purchases]
   );
 
+  // Effective price index used for recipe cost calculations :
+  // - Period entries take priority (reflect current cost reality)
+  // - Articles absent from the period fall back to their all-time average
+  //   (isFallback:true) so recipes never show 0,00€ just because an ingredient
+  //   wasn't purchased in the selected window (e.g. 30J for seasonal items).
+  const effectivePriceIndex = useMemo(
+    () => mergePriceIndexWithFallback(priceIndex, allTimePriceIndex),
+    [priceIndex, allTimePriceIndex]
+  );
+
   // Outflow index: precomputed theoretical outflows (sales × recipe lines)
   // per article, with cumulative-by-date support for fast "since D" queries.
   // Rebuilt only when sales or recipes change.
@@ -6435,7 +6495,7 @@ export default function LaTambouille() {
     equipmentCategories: userSettings.equipmentCategories,
     assetCategories: userSettings.assetCategories,
     thresholds: userSettings.thresholds,
-    priceIndex,
+    priceIndex: effectivePriceIndex,
     allTimePriceIndex,
     outflowIndex,
     alertsIndex,
@@ -9068,6 +9128,14 @@ function RecipeCard({ entry, onEdit, onDelete, onDuplicate }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
         <span style={{ fontSize: 11, color: palette.inkSoft }}>
           {(recipe.articles || []).length} articles
+          {breakdown.hasFallback && (
+            <span
+              title="Un ou plusieurs ingrédients n'ont pas été achetés sur cette période — prix basé sur l'historique complet"
+              style={{ marginLeft: 6, color: palette.amber, cursor: 'help' }}
+            >
+              ⏱ prix estimé
+            </span>
+          )}
         </span>
         <StatusPill ratio={ratio} />
       </div>
@@ -9462,6 +9530,21 @@ function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex }
               <SummaryStat label="Marge" value={formatEuro(margin)} color={margin >= 0 ? palette.sage : '#E88'} />
               <SummaryStat label="Food cost" value={formatPercent(ratio)} color={ratioColor} />
             </div>
+            {/* Avertissement si un ou plusieurs ingrédients n'ont pas été achetés
+                sur la période active — le prix vient de l'historique complet */}
+            {breakdown.hasFallback && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '8px 12px', marginBottom: 16,
+                background: palette.amber + '15',
+                border: `1px solid ${palette.amber}40`,
+                borderRadius: 6, fontSize: 12, color: palette.inkSoft,
+              }}>
+                <span style={{ color: palette.amber }}>⏱</span>
+                Certains ingrédients n'ont pas été achetés sur la période sélectionnée.
+                Leur prix vient de l'historique complet — le food cost est indicatif.
+              </div>
+            )}
             {/* Detailed breakdown when assortment is included — clarifies how the
                 total cost is composed */}
             {form.includesAssortment && breakdown.assortmentCost > 0 && (
