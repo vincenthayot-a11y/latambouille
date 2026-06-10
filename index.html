@@ -2033,16 +2033,19 @@ function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, i
     }
 
     // ─── Price trend ─────────────────────────────────────────────────────
-    const priceTrend = detectPriceTrend(article.id, purchases, today);
-    if (priceTrend && priceTrend.deltaPct >= PRICE_TREND_THRESHOLD_PCT) {
-      alerts.push({
-        article,
-        type: ALERT_TYPES.PRICE_TREND,
-        sortKey: 500 - priceTrend.deltaPct, // bigger delta = higher in list
-        recentAvg: priceTrend.recentAvg,
-        priorAvg: priceTrend.priorAvg,
-        deltaPct: priceTrend.deltaPct,
-      });
+    // Skip if the user disabled price alerts for this article (alertPrice === false).
+    if (article.alertPrice !== false) {
+      const priceTrend = detectPriceTrend(article.id, purchases, today);
+      if (priceTrend && priceTrend.deltaPct >= PRICE_TREND_THRESHOLD_PCT) {
+        alerts.push({
+          article,
+          type: ALERT_TYPES.PRICE_TREND,
+          sortKey: 500 - priceTrend.deltaPct, // bigger delta = higher in list
+          recentAvg: priceTrend.recentAvg,
+          priorAvg: priceTrend.priorAvg,
+          deltaPct: priceTrend.deltaPct,
+        });
+      }
     }
   }
 
@@ -7492,15 +7495,27 @@ function ArticlesView({ context }) {
                     </button>
                     <button
                       className="mc-btn mc-btn-ghost"
-                      style={{ padding: '4px 10px', color: article.alertStock === false ? palette.inkSoft : palette.wine, opacity: article.alertStock === false ? 0.4 : 1 }}
+                      style={{ padding: '4px 8px', color: article.alertStock === false ? palette.inkSoft : palette.wine, opacity: article.alertStock === false ? 0.4 : 1 }}
                       onClick={() => {
                         const updated = { ...article, alertStock: article.alertStock === false ? true : false };
                         setArticles(articles.map((a) => a.id === article.id ? updated : a));
-                        mcToast.success(updated.alertStock ? `Alertes activées : ${article.name}` : `Alertes désactivées : ${article.name}`);
+                        mcToast.success(updated.alertStock ? `Alerte stock activée : ${article.name}` : `Alerte stock désactivée : ${article.name}`);
                       }}
-                      title={article.alertStock === false ? 'Alertes désactivées — cliquer pour activer' : 'Alertes activées — cliquer pour désactiver'}
+                      title={article.alertStock === false ? 'Alerte stock désactivée — cliquer pour activer' : 'Alerte stock activée — cliquer pour désactiver'}
                     >
                       <AlertCircle size={14} />
+                    </button>
+                    <button
+                      className="mc-btn mc-btn-ghost"
+                      style={{ padding: '4px 8px', color: article.alertPrice === false ? palette.inkSoft : palette.amber, opacity: article.alertPrice === false ? 0.4 : 1 }}
+                      onClick={() => {
+                        const updated = { ...article, alertPrice: article.alertPrice === false ? true : false };
+                        setArticles(articles.map((a) => a.id === article.id ? updated : a));
+                        mcToast.success(updated.alertPrice ? `Alerte prix activée : ${article.name}` : `Alerte prix désactivée : ${article.name}`);
+                      }}
+                      title={article.alertPrice === false ? 'Alerte prix désactivée — cliquer pour activer' : 'Alerte prix activée — cliquer pour désactiver'}
+                    >
+                      <TrendingUp size={14} />
                     </button>
                     <button
                       className="mc-btn mc-btn-ghost"
@@ -7573,6 +7588,7 @@ function ArticleModal({ initial, onSave, onClose, categories }) {
     stockType: initial.stockType || DEFAULT_STOCK_TYPE,
     trackStock: initial.trackStock !== false,
     alertStock: initial.alertStock !== false,
+    alertPrice: initial.alertPrice !== false,
     manualThreshold: initial.manualThreshold ?? '',
     id: initial.id,
   });
@@ -7767,29 +7783,50 @@ function ArticleModal({ initial, onSave, onClose, categories }) {
               </div>
             </div>
 
-            {/* Alert toggle — independent from stock tracking */}
-            <div>
-              <label className="mc-label">Alerte de stock</label>
-              <label
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
-                  border: '1px solid ' + palette.rule, borderRadius: 6, cursor: 'pointer',
-                  background: form.alertStock !== false ? palette.wine + '08' : 'transparent',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={form.alertStock !== false}
-                  onChange={(e) => setForm({ ...form, alertStock: e.target.checked })}
-                />
-                <span style={{ fontSize: 12, fontWeight: 600 }}>
-                  {form.alertStock !== false ? 'Alertes activées' : 'Alertes désactivées'}
-                </span>
-              </label>
+            {/* Alert toggles — stock + prix, indépendants du suivi de stock */}
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label className="mc-label">Alertes</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <label
+                  style={{
+                    flex: '1 1 200px',
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                    border: '1px solid ' + palette.rule, borderRadius: 6, cursor: 'pointer',
+                    background: form.alertStock !== false ? palette.wine + '08' : 'transparent',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.alertStock !== false}
+                    onChange={(e) => setForm({ ...form, alertStock: e.target.checked })}
+                  />
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>
+                    Alerte stock {form.alertStock !== false ? 'activée' : 'désactivée'}
+                  </span>
+                </label>
+
+                <label
+                  style={{
+                    flex: '1 1 200px',
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                    border: '1px solid ' + palette.rule, borderRadius: 6, cursor: 'pointer',
+                    background: form.alertPrice !== false ? palette.amber + '12' : 'transparent',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.alertPrice !== false}
+                    onChange={(e) => setForm({ ...form, alertPrice: e.target.checked })}
+                  />
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>
+                    Alerte prix {form.alertPrice !== false ? 'activée' : 'désactivée'}
+                  </span>
+                </label>
+              </div>
               <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 6, lineHeight: 1.5 }}>
-                {form.alertStock !== false
-                  ? 'Une alerte se déclenchera quand le stock passe sous le seuil.'
-                  : 'Aucune alerte pour cet article. Le suivi de stock reste actif.'}
+                <strong>Stock</strong> : alerte quand le stock passe sous le seuil.{' '}
+                <strong>Prix</strong> : alerte quand le prix moyen grimpe de plus de {PRICE_TREND_THRESHOLD_PCT}% sur 30 jours.
+                Le suivi de stock reste actif même si les alertes sont coupées.
               </div>
             </div>
 
@@ -14853,6 +14890,37 @@ function AlertsView({ context }) {
     setEditingThresholdId(null);
   };
 
+  // Désactive une alerte (stock ou prix) pour un article donné, avec undo.
+  // kind = 'stock' → alertStock:false ; kind = 'price' → alertPrice:false
+  const handleDisableAlert = (articleId, kind) => {
+    const article = articles.find((a) => a.id === articleId);
+    if (!article) return;
+    const field = kind === 'price' ? 'alertPrice' : 'alertStock';
+    const _snap = articles;
+    setArticles(articles.map((a) => a.id === articleId ? { ...a, [field]: false } : a));
+    const label = kind === 'price' ? 'Alerte prix' : 'Alerte stock';
+    mcToast.undo(
+      `${label} désactivée : ${article.name}`,
+      () => { setArticles(_snap); mcToast.success('Annulé'); }
+    );
+  };
+
+  // Désactive EN MASSE les alertes d'une liste d'articles (stock ou prix).
+  // Opère sur les articles passés (typiquement les alertes actuellement
+  // visibles, filtres compris). Undo restaure l'état complet.
+  const handleDisableAllAlerts = (articleIds, kind) => {
+    if (!articleIds || articleIds.length === 0) return;
+    const field = kind === 'price' ? 'alertPrice' : 'alertStock';
+    const idSet = new Set(articleIds);
+    const _snap = articles;
+    setArticles(articles.map((a) => idSet.has(a.id) ? { ...a, [field]: false } : a));
+    const label = kind === 'price' ? 'alertes prix' : 'alertes stock';
+    mcToast.undo(
+      `${articleIds.length} ${label} désactivées`,
+      () => { setArticles(_snap); mcToast.success('Annulé'); }
+    );
+  };
+
   const selectStyle = { padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 12, color: palette.ink, cursor: 'pointer' };
 
   return (
@@ -14976,15 +15044,23 @@ function AlertsView({ context }) {
       {/* ─── Stock alerts ──────────────────────────────────────────────── */}
       {stockAlerts.length > 0 && (
         <section style={{ marginBottom: 32 }}>
-          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 12px' }}>
-            Stocks à commander ({stockAlerts.length})
-          </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 12px', gap: 12 }}>
+            <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+              Stocks à commander ({stockAlerts.length})
+            </h3>
+            <BulkDisableButton
+              count={stockAlerts.length}
+              label="alertes stock"
+              onConfirm={() => handleDisableAllAlerts(stockAlerts.map((a) => a.article.id), 'stock')}
+            />
+          </div>
           <div className="mc-card" style={{ overflow: 'hidden' }}>
             {stockAlerts.map((alert) => (
               <StockAlertRow
                 key={alert.article.id + '-' + alert.type}
                 alert={alert}
                 onEditThreshold={() => setEditingThresholdId(alert.article.id)}
+                onDisableAlert={() => handleDisableAlert(alert.article.id, 'stock')}
               />
             ))}
           </div>
@@ -14994,14 +15070,22 @@ function AlertsView({ context }) {
       {/* ─── Price trend alerts ────────────────────────────────────────── */}
       {priceAlerts.length > 0 && (
         <section style={{ marginBottom: 32 }}>
-          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 12px' }}>
-            Prix en hausse ({priceAlerts.length})
-          </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 12px', gap: 12 }}>
+            <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+              Prix en hausse ({priceAlerts.length})
+            </h3>
+            <BulkDisableButton
+              count={priceAlerts.length}
+              label="alertes prix"
+              onConfirm={() => handleDisableAllAlerts(priceAlerts.map((a) => a.article.id), 'price')}
+            />
+          </div>
           <div className="mc-card" style={{ overflow: 'hidden' }}>
             {priceAlerts.map((alert) => (
               <PriceAlertRow
                 key={alert.article.id + '-' + alert.type}
                 alert={alert}
+                onDisableAlert={() => handleDisableAlert(alert.article.id, 'price')}
               />
             ))}
           </div>
@@ -15050,7 +15134,41 @@ function AlertsView({ context }) {
  * One row in the stock alerts list. Shows the article name, current
  * stock, days of cover and a clear recommendation.
  */
-function StockAlertRow({ alert, onEditThreshold }) {
+// ─── BulkDisableButton ─────────────────────────────────────────────────────
+// Bouton "tout désactiver" avec confirmation au 2e clic (évite un confirm()
+// bloquant). 1er clic : passe en mode "armé" (texte rouge "Confirmer ?") ;
+// 2e clic dans les 4s : exécute. Sinon revient à l'état normal.
+function BulkDisableButton({ count, label, onConfirm }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button
+      className="mc-btn mc-btn-ghost"
+      style={{
+        padding: '6px 12px', fontSize: 12, flexShrink: 0,
+        color: armed ? palette.wine : palette.inkSoft,
+        borderColor: armed ? palette.wine : palette.rule,
+        fontWeight: armed ? 600 : 400,
+      }}
+      onClick={() => {
+        if (armed) { onConfirm(); setArmed(false); }
+        else setArmed(true);
+      }}
+      title={`Désactiver les ${count} ${label} affichées`}
+    >
+      {armed ? `Confirmer la désactivation des ${count} ?` : `🔕 Tout désactiver`}
+    </button>
+  );
+}
+
+/**
+ * One row in the low-stock alerts list.
+ */
+function StockAlertRow({ alert, onEditThreshold, onDisableAlert }) {
   const { article, type, currentStock, isEstimate, estimatedFromPurchases, consumptionPerDay, daysOfCover, threshold, thresholdSource, recommendation } = alert;
   const isEmpty = type === ALERT_TYPES.STOCK_EMPTY;
 
@@ -15134,14 +15252,24 @@ function StockAlertRow({ alert, onEditThreshold }) {
         )}
       </div>
 
-      <button
-        className="mc-btn mc-btn-ghost"
-        style={{ padding: '6px 10px', fontSize: 11 }}
-        onClick={onEditThreshold}
-        title="Ajuster le seuil de cet article"
-      >
-        <Edit3 size={12} /> Seuil
-      </button>
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <button
+          className="mc-btn mc-btn-ghost"
+          style={{ padding: '6px 10px', fontSize: 11 }}
+          onClick={onEditThreshold}
+          title="Ajuster le seuil de cet article"
+        >
+          <Edit3 size={12} /> Seuil
+        </button>
+        <button
+          className="mc-btn mc-btn-ghost"
+          style={{ padding: '6px 10px', fontSize: 11, color: palette.inkSoft }}
+          onClick={onDisableAlert}
+          title="Ne plus recevoir d'alerte stock pour cet article"
+        >
+          🔕 Ne plus suivre
+        </button>
+      </div>
     </div>
   );
 }
@@ -15150,7 +15278,7 @@ function StockAlertRow({ alert, onEditThreshold }) {
  * One row in the price-trend alerts list. Shows the price drift between the
  * last 30 days and the prior 30 days.
  */
-function PriceAlertRow({ alert }) {
+function PriceAlertRow({ alert, onDisableAlert }) {
   const { article, recentAvg, priorAvg, deltaPct } = alert;
   return (
     <div
@@ -15158,7 +15286,7 @@ function PriceAlertRow({ alert }) {
         padding: '14px 20px',
         borderBottom: '1px solid ' + palette.rule,
         display: 'grid',
-        gridTemplateColumns: '2fr 1fr 1fr 1fr',
+        gridTemplateColumns: '2fr 1fr 1fr 1fr auto',
         gap: 16,
         alignItems: 'center',
       }}
@@ -15193,6 +15321,15 @@ function PriceAlertRow({ alert }) {
           +{deltaPct.toFixed(1)}%
         </div>
       </div>
+
+      <button
+        className="mc-btn mc-btn-ghost"
+        style={{ padding: '6px 10px', fontSize: 11, color: palette.inkSoft }}
+        onClick={onDisableAlert}
+        title="Ne plus recevoir d'alerte prix pour cet article"
+      >
+        🔕 Ne plus suivre
+      </button>
     </div>
   );
 }
