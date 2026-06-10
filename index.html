@@ -2562,6 +2562,18 @@ const DEFAULT_USER_SETTINGS = {
     // Écart entre fournisseurs : seuil au-delà duquel on alerte
     supplierGapPct: 20,
   },
+  // Cibles de food cost PAR CATÉGORIE de recette (en %). Servent à calculer
+  // le prix de vente minimum suggéré dans l'éditeur de recette. La moyenne
+  // réelle de la catégorie est affichée à côté comme repère, mais la cible
+  // reste la norme — elle ne dérive pas avec la carte.
+  foodCostTargets: {
+    'Entrée': 28,
+    'Plat': 32,
+    'Dessert': 22,
+    'Accompagnement': 30,
+    'Boisson': 18,
+    'Autre': 30,
+  },
 };
 
 // Fusionne les réglages chargés du storage avec les défauts pour gérer
@@ -2573,6 +2585,7 @@ function mergeUserSettings(loaded) {
     equipmentCategories: d.equipmentCategories.slice(),
     assetCategories: d.assetCategories.slice(),
     thresholds: { ...d.thresholds },
+    foodCostTargets: { ...d.foodCostTargets },
   };
   return {
     articleCategories: Array.isArray(loaded.articleCategories) && loaded.articleCategories.length > 0
@@ -2585,6 +2598,7 @@ function mergeUserSettings(loaded) {
       ? loaded.assetCategories
       : d.assetCategories.slice(),
     thresholds: { ...d.thresholds, ...(loaded.thresholds || {}) },
+    foodCostTargets: { ...d.foodCostTargets, ...(loaded.foodCostTargets || {}) },
   };
 }
 
@@ -4245,12 +4259,23 @@ select.mc-input { cursor: pointer; }
 }
 
 @media print {
+  /* Tout masquer sauf la zone imprimable */
   body * { visibility: hidden; }
-  .mc-app, .mc-app * { visibility: hidden; }
   .mc-print-zone, .mc-print-zone * { visibility: visible !important; }
-  .mc-print-zone { position: absolute; left: 0; top: 0; width: 100%; }
-  .mc-btn, nav, header { display: none !important; }
+  .mc-print-zone { position: absolute; left: 0; top: 0; width: 100%; padding: 0 !important; }
+  /* Masquer les contrôles interactifs dans la zone imprimable */
+  .mc-print-zone .mc-btn,
+  .mc-print-zone button,
+  .mc-print-zone input,
+  .mc-print-zone .mc-no-print { display: none !important; }
+  /* L'en-tête d'impression (masqué à l'écran) devient visible */
+  .mc-print-header { display: block !important; }
+  /* Éviter les coupures de cartes en milieu de page */
+  .mc-card { break-inside: avoid; page-break-inside: avoid; box-shadow: none !important; }
+  nav, header { display: none !important; }
 }
+/* L'en-tête d'impression est masqué à l'écran */
+.mc-print-header { display: none; }
 `;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -8956,7 +8981,17 @@ function RecipesOnlyView({ context }) {
         />
       ) : grouped ? (
         // Vue groupée par catégorie
-        grouped.map((group) => (
+        grouped.map((group) => {
+          // Food cost moyen de la catégorie (recettes avec prix uniquement)
+          const withPrice = group.items.filter((e) => e.recipe.salePrice > 0);
+          const avgRatio = withPrice.length > 0
+            ? withPrice.reduce((s, e) => s + e.ratio, 0) / withPrice.length
+            : null;
+          const avgColor = avgRatio === null ? palette.inkSoft
+            : avgRatio < 0.30 ? palette.sage
+            : avgRatio < 0.35 ? palette.amber
+            : palette.statusBroken;
+          return (
           <div key={group.category} style={{ marginBottom: 28 }}>
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
@@ -8965,6 +9000,14 @@ function RecipesOnlyView({ context }) {
                 {group.category}
               </h4>
               <span style={{ fontSize: 12, color: palette.inkSoft }}>· {group.items.length}</span>
+              {avgRatio !== null && (
+                <span
+                  style={{ fontSize: 12, color: avgColor, fontWeight: 600 }}
+                  title={`Food cost moyen des ${withPrice.length} ${group.category.toLowerCase()}s avec prix de vente`}
+                >
+                  · FC moyen {formatPercent(avgRatio)}
+                </span>
+              )}
             </div>
             <div style={{
               display: 'grid',
@@ -8982,7 +9025,8 @@ function RecipesOnlyView({ context }) {
               ))}
             </div>
           </div>
-        ))
+          );
+        })
       ) : (
         // Vue à plat (triée par marge/coût/nom/food cost)
         <div style={{
@@ -9010,6 +9054,7 @@ function RecipesOnlyView({ context }) {
           articles={articles}
           recipes={recipes}
           priceIndex={priceIndex}
+          foodCostTargets={context.userSettings?.foodCostTargets}
         />
       )}
     </div>
@@ -9302,7 +9347,7 @@ function IngredientCombobox({ value, onChange, articles, priceIndex }) {
   );
 }
 
-function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex }) {
+function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex, foodCostTargets }) {
   const [form, setForm] = useState({
     name: initial.name || '',
     category: initial.category || 'Plat',
@@ -9333,7 +9378,35 @@ function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex }
   const margin = form.salePrice - cost;
   const ratio = form.salePrice > 0 ? cost / form.salePrice : 0;
 
-  const ratioColor = ratio < 0.30 ? palette.sage : ratio < 0.35 ? palette.amber : '#E88';
+  const ratioColor = ratio < 0.30 ? palette.sage : ratio < 0.35 ? palette.amber : palette.statusBroken;
+
+  // ─── Cible de food cost (configurable par catégorie dans Réglages) ──────
+  // targetPct = norme stable ; prix minimum = coût ÷ cible.
+  const targetPct = (foodCostTargets || {})[form.category] ?? 30;
+  const targetPrice = breakdown.plateCost > 0 && targetPct > 0
+    ? breakdown.plateCost / (targetPct / 100)
+    : null;
+  const targetMet = targetPrice !== null && form.salePrice >= targetPrice;
+
+  // ─── Moyenne réelle de la catégorie (repère, pas norme) ─────────────────
+  // Exclut la recette en cours d'édition (sinon elle se compare à elle-même)
+  // et les recettes sans prix de vente. Null si moins de 2 autres recettes.
+  const categoryAvgRatio = useMemo(() => {
+    const others = (recipes || []).filter((r) =>
+      r.id !== form.id &&
+      !r.isAssortmentBase &&
+      (r.category || 'Autre') === form.category &&
+      r.salePrice > 0
+    );
+    if (others.length < 2) return null;
+    const assortBase = findAssortmentBase(recipes);
+    let sum = 0, n = 0;
+    for (const r of others) {
+      const b = indexedPlateCost(r, priceIndex, assortBase);
+      if (r.salePrice > 0) { sum += b.plateCost / r.salePrice; n++; }
+    }
+    return n > 0 ? sum / n : null;
+  }, [recipes, form.id, form.category, priceIndex]);
 
   const addLine = () =>
     setForm({ ...form, articles: [...form.articles, { id: articles[0]?.id || '', qty: 0 }] });
@@ -9496,8 +9569,15 @@ function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex }
                 <span style={{ fontSize: 12, color: palette.inkSoft, width: 40 }}>
                   {article ? article.unit : ''}
                 </span>
-                <span className="mc-display" style={{ fontSize: 14, fontWeight: 600, width: 80, textAlign: 'right' }}>
-                  {formatEuro(price * line.qty)}
+                <span style={{ width: 110, textAlign: 'right' }}>
+                  <span className="mc-display" style={{ fontSize: 14, fontWeight: 600 }}>
+                    {formatEuro(price * line.qty)}
+                  </span>
+                  {breakdown.recipeCost > 0 && price * line.qty > 0 && (
+                    <span style={{ fontSize: 10, color: palette.inkSoft, marginLeft: 4 }}>
+                      ({Math.round((price * line.qty / breakdown.recipeCost) * 100)}%)
+                    </span>
+                  )}
                 </span>
                 <button className="mc-btn mc-btn-danger" style={{ padding: '4px 8px' }} onClick={() => removeLine(index)}>
                   <X size={14} />
@@ -9520,16 +9600,46 @@ function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex }
           </div>
         ) : (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, padding: 16, background: palette.ink, borderRadius: 8, marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, padding: 16, background: palette.ink, borderRadius: 8, marginBottom: 12 }}>
               <SummaryStat
                 label={form.includesAssortment ? "Coût assiette" : "Coût portion"}
                 value={formatEuro(breakdown.plateCost)}
                 color={palette.cream}
               />
               <SummaryStat label="Vente" value={formatEuro(form.salePrice)} color={palette.cream} />
-              <SummaryStat label="Marge" value={formatEuro(margin)} color={margin >= 0 ? palette.sage : '#E88'} />
+              <SummaryStat label="Marge" value={formatEuro(margin)} color={margin >= 0 ? palette.sage : palette.wineLight} />
               <SummaryStat label="Food cost" value={formatPercent(ratio)} color={ratioColor} />
             </div>
+
+            {/* Cible de prix + repère catégorie */}
+            {!form.isAssortmentBase && targetPrice !== null && (
+              <div style={{
+                display: 'flex', flexDirection: 'column', gap: 4,
+                padding: '10px 14px', marginBottom: 12,
+                background: targetMet ? palette.sage + '10' : palette.wine + '08',
+                border: `1px solid ${targetMet ? palette.sage : palette.wine}30`,
+                borderRadius: 6, fontSize: 12.5,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: palette.ink }}>
+                  <span style={{ color: targetMet ? palette.sage : palette.wine, fontWeight: 700 }}>
+                    {targetMet ? '✓' : '✗'}
+                  </span>
+                  <span>
+                    Cible {form.category || 'Autre'} ({targetPct}%) → vendre ≥ <strong>{formatEuro(targetPrice)}</strong>
+                    {targetMet
+                      ? ` — atteint (vous vendez ${formatEuro(form.salePrice)})`
+                      : form.salePrice > 0
+                        ? ` — il manque ${formatEuro(targetPrice - form.salePrice)}`
+                        : ''}
+                  </span>
+                </div>
+                {categoryAvgRatio !== null && (
+                  <div style={{ color: palette.inkSoft, paddingLeft: 18 }}>
+                    Repère : moyenne de vos {form.category ? form.category.toLowerCase() + 's' : 'recettes'} {formatPercent(categoryAvgRatio)} · ce plat {formatPercent(ratio)}
+                  </div>
+                )}
+              </div>
+            )}
             {/* Avertissement si un ou plusieurs ingrédients n'ont pas été achetés
                 sur la période active — le prix vient de l'historique complet */}
             {breakdown.hasFallback && (
@@ -17678,11 +17788,12 @@ function exportFullBackup(context) {
 function ReportView({ context }) {
   const { purchases, energy, equipment, equipmentPurchases, assetMaintenance,
           assetInterventions, alertsIndex, articles } = context;
+  const isMobile = useIsMobile(720);
 
   const now = new Date();
-  const currentMonthKey = now.toISOString().slice(0, 7);
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const firstOfMonth = currentMonthKey + '-01';
-  const today = now.toISOString().slice(0, 10);
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const [reportFrom, setReportFrom] = useState(firstOfMonth);
   const [reportTo, setReportTo] = useState(today);
   const [articleSearch, setArticleSearch] = useState('');
@@ -17901,14 +18012,99 @@ function ReportView({ context }) {
   const totalPrev = prevMonthPurchases.reduce((s, p) => s + (p.total || 0), 0);
   const totalEvol = totalPrev > 0 ? ((totalMonth - totalPrev) / totalPrev) * 100 : null;
 
+  // ─── Coûts d'exploitation complets : énergie + équipement sur la période ──
+  const operatingCosts = useMemo(() => {
+    const inPeriod = (d) => d && (!reportFrom || d >= reportFrom) && (!reportTo || d <= reportTo);
+    const inPrev = (d) => d && d >= prevPeriod.from && d <= prevPeriod.to;
+
+    const sum = (list, dateField, totalFn) => {
+      let curr = 0, prev = 0;
+      for (const item of (list || [])) {
+        const d = item[dateField] || '';
+        const v = totalFn(item);
+        if (inPeriod(d)) curr += v;
+        else if (inPrev(d)) prev += v;
+      }
+      return { curr, prev };
+    };
+
+    const energyCosts = sum(energy, 'date', (e) => e.totalTTC || e.totalHT || 0);
+    const equipPurch = sum(equipmentPurchases, 'date', (e) => e.total || 0);
+    const interventions = sum(assetInterventions, 'date', (e) => e.cost || 0);
+
+    // Contrats d'entretien : coût annualisé prorata de la durée de la période
+    const periodDays = Math.max(1, daysBetween(reportFrom, reportTo) + 1);
+    let maintenanceCurr = 0;
+    for (const m of (assetMaintenance || [])) {
+      const perYear = (CONTRACT_FREQUENCIES.find((f) => f.id === m.frequency)?.perYear || 0);
+      const annualCost = (m.cost || 0) * perYear;
+      maintenanceCurr += (annualCost / 365) * periodDays;
+    }
+
+    const equipmentTotal = equipPurch.curr + interventions.curr + maintenanceCurr;
+    const grandTotal = totalMonth + energyCosts.curr + equipmentTotal;
+
+    return {
+      energy: energyCosts,
+      equipPurchases: equipPurch,
+      interventions,
+      maintenanceProrata: maintenanceCurr,
+      equipmentTotal,
+      grandTotal,
+    };
+  }, [energy, equipmentPurchases, assetInterventions, assetMaintenance, reportFrom, reportTo, prevPeriod, totalMonth]);
+
+  // ─── Répartition par fournisseur (achats de la période) ──────────────────
+  const supplierBreakdown = useMemo(() => {
+    const map = {};
+    for (const p of monthPurchases) {
+      const sup = (p.supplier || 'Inconnu').trim() || 'Inconnu';
+      map[sup] = (map[sup] || 0) + (p.total || 0);
+    }
+    return Object.entries(map)
+      .map(([name, total]) => ({ name, total }))
+      .sort((a, b) => b.total - a.total);
+  }, [monthPurchases]);
+
+  // ─── Répartition par catégorie d'article ────────────────────────────────
+  const categoryBreakdown = useMemo(() => {
+    const map = {};
+    for (const p of monthPurchases) {
+      for (const item of (p.items || [])) {
+        if (!item.articleId || !(item.total > 0)) continue;
+        const art = articles.find((a) => a.id === item.articleId);
+        const cat = art?.category || 'À trier';
+        map[cat] = (map[cat] || 0) + item.total;
+      }
+    }
+    return Object.entries(map)
+      .map(([name, total]) => ({ name, total }))
+      .sort((a, b) => b.total - a.total);
+  }, [monthPurchases, articles]);
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+    <div className="mc-print-zone" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+      {/* En-tête visible uniquement à l'impression */}
+      <div className="mc-print-header" style={{ marginBottom: 8 }}>
+        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 26, fontWeight: 700, color: palette.wine }}>
+          Le Point de Vue
+        </div>
+        <div style={{ fontSize: 14, color: palette.inkSoft, marginTop: 2 }}>
+          Rapport d'exploitation · du {formatShortDate(reportFrom, { withYear: true })} au {formatShortDate(reportTo, { withYear: true })}
+        </div>
+        <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2 }}>
+          Édité le {formatShortDate(today, { withYear: true })} · La Tambouille
+        </div>
+      </div>
 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Rapport mensuel</h2>
-          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>Le Point de Vue · {reportFrom} → {reportTo}</div>
+          <h2 className="mc-display" style={{ fontSize: isMobile ? 20 : 24, fontWeight: 600, margin: 0 }}>Rapport</h2>
+          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>
+            Le Point de Vue · du {formatShortDate(reportFrom, { withYear: true })} au {formatShortDate(reportTo, { withYear: true })}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
@@ -17962,36 +18158,121 @@ function ReportView({ context }) {
         </div>
       </div>
 
-      {/* KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-        <div className="mc-card" style={{ padding: 20 }}>
-          <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Total achats</div>
-          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 28, color: palette.ink }}>{formatEuro(totalMonth)}</div>
-          {totalEvol !== null && (
-            <div style={{ fontSize: 13, marginTop: 6, color: totalEvol > 10 ? palette.wine : totalEvol > 0 ? palette.amber : palette.sage, display: 'flex', alignItems: 'center', gap: 4 }}>
-              {totalEvol > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-              {totalEvol > 0 ? '+' : ''}{totalEvol.toFixed(1)}% vs période préc.
-            </div>
-          )}
-        </div>
-        <div className="mc-card" style={{ padding: 20 }}>
-          <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Factures du mois</div>
-          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 28, color: palette.ink }}>{monthPurchases.length}</div>
-          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 6 }}>
-            {[...new Set(monthPurchases.map((p) => p.supplier).filter(Boolean))].length} fournisseur(s)
+      {/* Coûts d'exploitation : total + détail par poste */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <KpiCard
+          variant="hero"
+          label="Coût d'exploitation total"
+          value={formatEuro(operatingCosts.grandTotal)}
+          accentColor={palette.wine}
+          sub={`Achats ${formatEuro(totalMonth)} · Énergie ${formatEuro(operatingCosts.energy.curr)} · Équipement ${formatEuro(operatingCosts.equipmentTotal)}`}
+        />
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(170px, 1fr))',
+          gap: isMobile ? 10 : 12,
+        }}>
+          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
+            <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Achats</div>
+            <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: isMobile ? 20 : 26, color: palette.ink }}>{formatEuro(totalMonth)}</div>
+            {totalEvol !== null && (
+              <div style={{ fontSize: 12, marginTop: 6, color: totalEvol > 10 ? palette.wine : totalEvol > 0 ? palette.amber : palette.sage, display: 'flex', alignItems: 'center', gap: 4 }}>
+                {totalEvol > 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+                {totalEvol > 0 ? '+' : ''}{totalEvol.toFixed(1)}% vs préc.
+              </div>
+            )}
           </div>
-        </div>
-        <div className="mc-card" style={{ padding: 20 }}>
-          <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Alertes actives</div>
-          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 28, color: alertsIndex.length > 0 ? palette.wine : palette.sage }}>{alertsIndex.length}</div>
-          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 6 }}>
-            {alertsIndex.filter((a) => a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY).length} stock · {alertsIndex.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP).length} prix
+          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
+            <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Énergie</div>
+            <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: isMobile ? 20 : 26, color: palette.ink }}>{formatEuro(operatingCosts.energy.curr)}</div>
+            {operatingCosts.energy.prev > 0 && (
+              <div style={{ fontSize: 12, marginTop: 6, color: palette.inkSoft }}>
+                vs {formatEuro(operatingCosts.energy.prev)} préc.
+              </div>
+            )}
+          </div>
+          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
+            <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Équipement</div>
+            <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: isMobile ? 20 : 26, color: palette.ink }}>{formatEuro(operatingCosts.equipmentTotal)}</div>
+            <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 6 }}>
+              dont entretien {formatEuro(operatingCosts.maintenanceProrata)} (prorata)
+            </div>
+          </div>
+          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
+            <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Factures · Alertes</div>
+            <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: isMobile ? 20 : 26, color: palette.ink }}>
+              {monthPurchases.length}
+              <span style={{ fontSize: 14, color: alertsIndex.length > 0 ? palette.wine : palette.sage, marginLeft: 8 }}>
+                · {alertsIndex.length} alertes
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 6 }}>
+              {[...new Set(monthPurchases.map((p) => p.supplier).filter(Boolean))].length} fournisseur(s)
+            </div>
           </div>
         </div>
       </div>
 
+      {/* Répartition par fournisseur et par catégorie */}
+      {(supplierBreakdown.length > 0 || categoryBreakdown.length > 0) && (
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
+          <div className="mc-card" style={{ padding: 20 }}>
+            <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Répartition par fournisseur</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {supplierBreakdown.slice(0, 8).map(({ name, total }) => {
+                const pct = totalMonth > 0 ? (total / totalMonth) * 100 : 0;
+                return (
+                  <div key={name}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
+                      <span style={{ color: palette.ink }}>{name}</span>
+                      <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
+                        {formatEuro(total)} <span style={{ fontWeight: 400, color: palette.inkSoft, fontSize: 11 }}>({pct.toFixed(0)}%)</span>
+                      </span>
+                    </div>
+                    <div style={{ height: 6, background: palette.paper, borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${pct}%`, background: palette.wine, borderRadius: 3 }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {supplierBreakdown.length > 8 && (
+                <div style={{ fontSize: 11, color: palette.inkSoft, fontStyle: 'italic' }}>
+                  + {supplierBreakdown.length - 8} autres fournisseurs
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="mc-card" style={{ padding: 20 }}>
+            <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Répartition par catégorie</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {categoryBreakdown.slice(0, 8).map(({ name, total }) => {
+                const pct = totalMonth > 0 ? (total / totalMonth) * 100 : 0;
+                return (
+                  <div key={name}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
+                      <span style={{ color: palette.ink }}>{name}</span>
+                      <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
+                        {formatEuro(total)} <span style={{ fontWeight: 400, color: palette.inkSoft, fontSize: 11 }}>({pct.toFixed(0)}%)</span>
+                      </span>
+                    </div>
+                    <div style={{ height: 6, background: palette.paper, borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${pct}%`, background: palette.sage, borderRadius: 3 }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {categoryBreakdown.length > 8 && (
+                <div style={{ fontSize: 11, color: palette.inkSoft, fontStyle: 'italic' }}>
+                  + {categoryBreakdown.length - 8} autres catégories
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 2 columns */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
 
         {/* Top 5 most purchased */}
         <div className="mc-card" style={{ padding: 20 }}>
@@ -19687,6 +19968,33 @@ function SettingsView({ context }) {
               patchThresholds({ supplierGapPct: v });
             }}
           />
+        </div>
+      </div>
+
+      {/* ─── Cibles food cost par catégorie ────────────────────────────────── */}
+      <div className="mc-card" style={{ padding: 20 }}>
+        <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
+          Cibles food cost par catégorie
+        </h3>
+        <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 16px' }}>
+          Dans l'éditeur de recette, le prix de vente minimum suggéré est calculé sur ces cibles.
+          Une entrée et un dessert n'ont pas la même cible qu'un plat — ajustez selon votre positionnement.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre'].map((cat) => (
+            <ThresholdInput
+              key={cat}
+              label={cat}
+              help={`Food cost cible pour vos ${cat.toLowerCase()}s — sert au prix suggéré.`}
+              value={(userSettings.foodCostTargets || {})[cat] ?? 30}
+              suffix="%"
+              min={1} max={90} step={1}
+              onChange={(v) => setUserSettings((s) => ({
+                ...s,
+                foodCostTargets: { ...(s.foodCostTargets || {}), [cat]: v },
+              }))}
+            />
+          ))}
         </div>
       </div>
 
