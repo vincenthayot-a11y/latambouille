@@ -2574,6 +2574,9 @@ const DEFAULT_USER_SETTINGS = {
     'Boisson': 18,
     'Autre': 30,
   },
+  // Catégories de recettes (éditables dans Réglages). L'ordre de la liste
+  // définit l'ordre d'affichage des groupes dans l'onglet Recettes.
+  recipeCategories: ['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre'],
 };
 
 // Fusionne les réglages chargés du storage avec les défauts pour gérer
@@ -2586,6 +2589,7 @@ function mergeUserSettings(loaded) {
     assetCategories: d.assetCategories.slice(),
     thresholds: { ...d.thresholds },
     foodCostTargets: { ...d.foodCostTargets },
+    recipeCategories: d.recipeCategories.slice(),
   };
   return {
     articleCategories: Array.isArray(loaded.articleCategories) && loaded.articleCategories.length > 0
@@ -2599,6 +2603,9 @@ function mergeUserSettings(loaded) {
       : d.assetCategories.slice(),
     thresholds: { ...d.thresholds, ...(loaded.thresholds || {}) },
     foodCostTargets: { ...d.foodCostTargets, ...(loaded.foodCostTargets || {}) },
+    recipeCategories: Array.isArray(loaded.recipeCategories) && loaded.recipeCategories.length > 0
+      ? loaded.recipeCategories
+      : d.recipeCategories.slice(),
   };
 }
 
@@ -6519,6 +6526,7 @@ export default function LaTambouille() {
     articleCategories: userSettings.articleCategories,
     equipmentCategories: userSettings.equipmentCategories,
     assetCategories: userSettings.assetCategories,
+    recipeCategories: userSettings.recipeCategories,
     thresholds: userSettings.thresholds,
     priceIndex: effectivePriceIndex,
     allTimePriceIndex,
@@ -8774,12 +8782,19 @@ function RecipesOnlyView({ context }) {
     [recipes]
   );
 
-  // ─── Catégories présentes (pour le filtre), dans l'ordre du menu ───────
-  const CATEGORY_ORDER = ['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre'];
+  // ─── Catégories présentes (pour le filtre), dans l'ordre des Réglages ──
+  // Les catégories inconnues (recettes dont la catégorie a été supprimée des
+  // Réglages) sont ajoutées en fin de liste pour rester visibles.
+  const CATEGORY_ORDER = useMemo(() => {
+    const configured = context.recipeCategories || ['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre'];
+    const present = new Set(sellableRecipes.map((r) => r.category || 'Autre'));
+    const unknown = [...present].filter((c) => !configured.includes(c)).sort();
+    return [...configured, ...unknown];
+  }, [context.recipeCategories, sellableRecipes]);
   const presentCategories = useMemo(() => {
     const set = new Set(sellableRecipes.map((r) => r.category || 'Autre'));
     return CATEGORY_ORDER.filter((c) => set.has(c));
-  }, [sellableRecipes]);
+  }, [sellableRecipes, CATEGORY_ORDER]);
 
   // ─── Enrichit chaque recette avec coût/marge/ratio (pour tri + KPIs) ───
   const enriched = useMemo(() => {
@@ -9055,6 +9070,7 @@ function RecipesOnlyView({ context }) {
           recipes={recipes}
           priceIndex={priceIndex}
           foodCostTargets={context.userSettings?.foodCostTargets}
+          recipeCategories={context.recipeCategories}
         />
       )}
     </div>
@@ -9347,7 +9363,7 @@ function IngredientCombobox({ value, onChange, articles, priceIndex }) {
   );
 }
 
-function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex, foodCostTargets }) {
+function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex, foodCostTargets, recipeCategories }) {
   const [form, setForm] = useState({
     name: initial.name || '',
     category: initial.category || 'Plat',
@@ -9435,7 +9451,14 @@ function RecipeModal({ initial, onSave, onClose, articles, recipes, priceIndex, 
           <div>
             <label className="mc-label">Catégorie</label>
             <select className="mc-input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-              {['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre'].map((c) => <option key={c}>{c}</option>)}
+              {(() => {
+                const cats = recipeCategories || ['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre'];
+                // Si la catégorie actuelle de la recette n'est plus dans la liste
+                // (supprimée des Réglages), on l'affiche quand même pour ne pas
+                // la perdre silencieusement au prochain enregistrement.
+                const all = form.category && !cats.includes(form.category) ? [...cats, form.category] : cats;
+                return all.map((c) => <option key={c}>{c}</option>);
+              })()}
             </select>
           </div>
           <div>
@@ -19711,6 +19734,7 @@ function SettingsView({ context }) {
     articles, setArticles,
     equipment, setEquipment,
     assets, setAssets,
+    recipes, setRecipes,
     alertSettings, setAlertSettings,
   } = context;
 
@@ -19792,6 +19816,106 @@ function SettingsView({ context }) {
     mcToast.undo(`« ${source} » fusionné dans « ${target} »`, () => {
       patchSettings({ articleCategories: _snapList });
       setArticles(_snapArticles);
+      mcToast.success('Fusion annulée');
+    });
+  };
+
+  // ─── Opérations sur les catégories de RECETTES (strings) ─────────────────
+  // Même modèle que les articles : recipe.category contient la string brute.
+  // Particularité : foodCostTargets est indexé par nom de catégorie, donc on
+  // doit suivre les renommages/fusions pour ne pas perdre la cible associée.
+  const countRecipesIn = (cat) => recipes.filter((r) => !r.isAssortmentBase && (r.category || 'Autre') === cat).length;
+
+  const renameRecipeCategory = (oldName, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return;
+    if (userSettings.recipeCategories.includes(trimmed)) {
+      mcToast.error(`« ${trimmed} » existe déjà — utilisez Fusionner.`);
+      return;
+    }
+    const _snap = userSettings;
+    const _snapRecipes = recipes;
+    setUserSettings((s) => {
+      const targets = { ...(s.foodCostTargets || {}) };
+      if (targets[oldName] !== undefined) {
+        targets[trimmed] = targets[oldName];
+        delete targets[oldName];
+      }
+      return {
+        ...s,
+        recipeCategories: s.recipeCategories.map((c) => c === oldName ? trimmed : c),
+        foodCostTargets: targets,
+      };
+    });
+    setRecipes(recipes.map((r) =>
+      (r.category || 'Autre') === oldName ? { ...r, category: trimmed } : r
+    ));
+    mcToast.undo(`Renommé en « ${trimmed} »`, () => {
+      setUserSettings(_snap);
+      setRecipes(_snapRecipes);
+      mcToast.success('Renommage annulé');
+    });
+  };
+
+  const addRecipeCategory = (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (userSettings.recipeCategories.includes(trimmed)) {
+      mcToast.error(`« ${trimmed} » existe déjà.`);
+      return;
+    }
+    setUserSettings((s) => ({
+      ...s,
+      recipeCategories: [...s.recipeCategories, trimmed],
+      // La nouvelle catégorie reçoit une cible food cost par défaut (30%)
+      foodCostTargets: { ...(s.foodCostTargets || {}), [trimmed]: (s.foodCostTargets || {})[trimmed] ?? 30 },
+    }));
+    mcToast.success(`Catégorie « ${trimmed} » ajoutée`);
+  };
+
+  const deleteRecipeCategory = (name, reassignTo) => {
+    const _snap = userSettings;
+    const _snapRecipes = recipes;
+    setUserSettings((s) => {
+      const targets = { ...(s.foodCostTargets || {}) };
+      delete targets[name];
+      return {
+        ...s,
+        recipeCategories: s.recipeCategories.filter((c) => c !== name),
+        foodCostTargets: targets,
+      };
+    });
+    if (reassignTo) {
+      setRecipes(recipes.map((r) =>
+        (r.category || 'Autre') === name ? { ...r, category: reassignTo } : r
+      ));
+    }
+    mcToast.undo(`Catégorie « ${name} » supprimée`, () => {
+      setUserSettings(_snap);
+      setRecipes(_snapRecipes);
+      mcToast.success('Restauré');
+    });
+  };
+
+  const mergeRecipeCategory = (source, target) => {
+    if (source === target) return;
+    const _snap = userSettings;
+    const _snapRecipes = recipes;
+    setRecipes(recipes.map((r) =>
+      (r.category || 'Autre') === source ? { ...r, category: target } : r
+    ));
+    setUserSettings((s) => {
+      const targets = { ...(s.foodCostTargets || {}) };
+      delete targets[source];
+      return {
+        ...s,
+        recipeCategories: s.recipeCategories.filter((c) => c !== source),
+        foodCostTargets: targets,
+      };
+    });
+    mcToast.undo(`« ${source} » fusionné dans « ${target} »`, () => {
+      setUserSettings(_snap);
+      setRecipes(_snapRecipes);
       mcToast.success('Fusion annulée');
     });
   };
@@ -19881,6 +20005,19 @@ function SettingsView({ context }) {
           automatiquement et synchronisées via Drive si la synchro est active.
         </p>
       </div>
+
+      {/* ─── Catégories de recettes ───────────────────────────────────────── */}
+      <StringCategoriesSection
+        title="Catégories de recettes"
+        helper="Entrées, plats, desserts… Servent au regroupement dans l'onglet Recettes et aux cibles de food cost. L'ordre de la liste définit l'ordre d'affichage."
+        list={userSettings.recipeCategories}
+        countFor={countRecipesIn}
+        onAdd={addRecipeCategory}
+        onRename={renameRecipeCategory}
+        onDelete={deleteRecipeCategory}
+        onMerge={mergeRecipeCategory}
+        itemLabel="recette"
+      />
 
       {/* ─── Catégories d'articles ────────────────────────────────────────── */}
       <StringCategoriesSection
@@ -19981,7 +20118,7 @@ function SettingsView({ context }) {
           Une entrée et un dessert n'ont pas la même cible qu'un plat — ajustez selon votre positionnement.
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre'].map((cat) => (
+          {(userSettings.recipeCategories || ['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre']).map((cat) => (
             <ThresholdInput
               key={cat}
               label={cat}
