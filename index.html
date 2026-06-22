@@ -3260,6 +3260,7 @@ const DRIVE_STORAGE_KEYS = {
   endpoint: 'mc5:driveEndpoint',           // Apps Script Web App URL
   token: 'mc5:driveToken',                 // user-chosen secret token
   lastSyncedAt: 'mc5:driveLastSyncedAt',
+  lastBackupDate: 'mc5:driveLastBackupDate',  // 'YYYY-MM-DD' du dernier snapshot daté
   dirtyFiles: 'mc5:driveDirtyFiles',       // array of filenames waiting to be pushed
 };
 
@@ -3532,6 +3533,71 @@ async function driveWriteSpecificFiles(endpoint, token, filesToWrite) {
   return count;
 }
 
+// ─── Snapshots de sauvegarde horodatés ──────────────────────────────────────
+// Filet de sécurité : dépose une copie COMPLÈTE et datée des données sous
+// `backup-YYYY-MM-DD.json`. Ces fichiers ne sont jamais relus au démarrage
+// (parseFilename renvoie null → ignorés au pull), donc ils ne peuvent pas
+// écraser les données courantes. Ils servent uniquement d'archive à restaurer
+// manuellement en cas d'accident.
+//
+// Règles :
+//   • 1 snapshot par jour maximum (le nom inclut la date → réécriture du jour)
+//   • rotation à 30 : si 30 snapshots existent déjà et qu'on en crée un
+//     nouveau (date encore absente), on réutilise le nom du PLUS ANCIEN.
+//     Comme l'Apps Script n'expose pas d'action "delete", écraser le plus
+//     vieux fichier revient au même que le supprimer puis recréer.
+
+const BACKUP_PREFIX = 'backup-';
+const BACKUP_MAX = 30;
+
+function backupFilenameForDate(d = new Date()) {
+  // Date locale (Martinique UTC-4) — on ne veut pas que le nom saute d'un jour
+  // à cause d'une conversion UTC.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${BACKUP_PREFIX}${y}-${m}-${day}.json`;
+}
+
+function isBackupFilename(name) {
+  return /^backup-\d{4}-\d{2}-\d{2}\.json$/.test(name);
+}
+
+/**
+ * Crée (ou met à jour) le snapshot du jour, avec rotation à BACKUP_MAX.
+ * `fullData` est l'enveloppe complète { articles, recipes, menus, ... }.
+ * Retourne le nom du fichier écrit, ou null si rien n'a été fait.
+ */
+async function driveWriteDatedBackup(endpoint, token, fullData) {
+  const todayName = backupFilenameForDate();
+
+  // Liste des snapshots existants
+  const allFiles = await driveListFiles(endpoint, token);
+  const backups = allFiles.filter((f) => isBackupFilename(f.name)).map((f) => f.name).sort();
+
+  // Si le snapshot du jour existe déjà, on l'écrase (1/jour) — sinon rotation
+  let targetName = todayName;
+  if (!backups.includes(todayName) && backups.length >= BACKUP_MAX) {
+    // On réutilise le nom du plus ancien (premier dans l'ordre alphabétique =
+    // chronologique pour ce format de date). Le contenu daté reste correct car
+    // le snapshot lui-même porte sa propre date d'export à l'intérieur.
+    targetName = backups[0];
+  }
+
+  const payload = {
+    ...fullData,
+    _backupMeta: {
+      exportedAt: new Date().toISOString(),
+      label: todayName,
+      appVersion: 5,
+    },
+  };
+
+  await driveWriteFile(endpoint, token, targetName, payload);
+  console.log('[Drive] Snapshot écrit :', targetName, '(', backups.length, 'snapshots existants )');
+  return targetName;
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 //   DRIVE SYNC HOOK
@@ -3567,6 +3633,7 @@ function useDriveSync({ data, applyRemoteData }) {
   const endpointRef = useRef(endpoint);
   const tokenRef = useRef(token);
   const lastSyncedSplitRef = useRef(null); // snapshot of last successfully-pushed split
+  const lastBackupDateRef = useRef(null);  // 'YYYY-MM-DD' du dernier snapshot daté créé
 
   useEffect(() => { dataRef.current = data; }, [data]);
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
@@ -3580,6 +3647,7 @@ function useDriveSync({ data, applyRemoteData }) {
       const savedEndpoint = await storageGet(DRIVE_STORAGE_KEYS.endpoint, '');
       const savedToken = await storageGet(DRIVE_STORAGE_KEYS.token, '');
       const lastSync = await storageGet(DRIVE_STORAGE_KEYS.lastSyncedAt, null);
+      lastBackupDateRef.current = await storageGet(DRIVE_STORAGE_KEYS.lastBackupDate, null);
 
       setEnabled(wasEnabled);
       setEndpoint(savedEndpoint);
@@ -3639,6 +3707,21 @@ function useDriveSync({ data, applyRemoteData }) {
       await storageSet(DRIVE_STORAGE_KEYS.lastSyncedAt, now);
 
       console.log('[Drive] Push succeeded at', now);
+
+      // ─── Snapshot daté (max 1/jour) ───────────────────────────────────────
+      // Best-effort : un échec de snapshot ne doit jamais faire échouer le sync.
+      // On ne crée un snapshot qu'une fois par jour calendaire local.
+      const todayKey = backupFilenameForDate().replace('backup-', '').replace('.json', '');
+      if (lastBackupDateRef.current !== todayKey) {
+        try {
+          await driveWriteDatedBackup(endpointRef.current, tokenRef.current, dataRef.current);
+          lastBackupDateRef.current = todayKey;
+          await storageSet(DRIVE_STORAGE_KEYS.lastBackupDate, todayKey);
+        } catch (backupErr) {
+          // On log mais on n'interrompt pas : le sync principal a réussi.
+          console.warn('[Drive] Snapshot quotidien échoué (sync OK):', backupErr.message);
+        }
+      }
     } catch (err) {
       console.error('[Drive] Push failed:', err);
       setError(err.message || String(err));
@@ -3855,6 +3938,28 @@ function useDriveSync({ data, applyRemoteData }) {
     push();
   }, [push]);
 
+  // ─── backupNow: crée un snapshot daté immédiatement (bouton manuel) ───────
+  // Contourne la limite "1/jour" : force la création/écrasement du snapshot
+  // du jour. Utile pour créer le premier filet de sécurité tout de suite.
+  const backupNow = useCallback(async () => {
+    if (!endpointRef.current || !tokenRef.current) {
+      throw new Error('Sync Drive non configurée');
+    }
+    setStatus('syncing');
+    try {
+      const name = await driveWriteDatedBackup(endpointRef.current, tokenRef.current, dataRef.current);
+      const todayKey = backupFilenameForDate().replace('backup-', '').replace('.json', '');
+      lastBackupDateRef.current = todayKey;
+      await storageSet(DRIVE_STORAGE_KEYS.lastBackupDate, todayKey);
+      setStatus('idle');
+      return name;
+    } catch (err) {
+      setStatus('error');
+      setError(err.message || String(err));
+      throw err;
+    }
+  }, []);
+
   // Cleanup any pending timer on unmount
   useEffect(() => {
     return () => {
@@ -3874,6 +3979,7 @@ function useDriveSync({ data, applyRemoteData }) {
     disable,
     scheduleSync,
     forceSync,
+    backupNow,
     pull,
     resolveConflictKeepLocal,
     resolveConflictKeepRemote,
@@ -4815,6 +4921,7 @@ function SyncSettingsModal({ syncState, onClose, onExportBackup }) {
     enable,
     disable,
     forceSync,
+    backupNow,
     pull,
   } = syncState;
 
@@ -4980,6 +5087,18 @@ function SyncSettingsModal({ syncState, onClose, onExportBackup }) {
                 style={{ justifyContent: 'center', padding: '10px 16px' }}
               >
                 <Upload size={14} style={{ transform: 'rotate(180deg)' }} /> Récupérer Drive (pull → local)
+              </button>
+              <button
+                className="mc-btn mc-btn-ghost"
+                onClick={() => wrapAction(async () => {
+                  const name = await backupNow();
+                  mcToast.success(`Snapshot créé sur Drive : ${name}`);
+                })}
+                disabled={busy || status === 'syncing' || !enabled}
+                style={{ justifyContent: 'center', padding: '10px 16px', color: palette.sage }}
+                title="Crée une copie datée non-écrasable sur Drive (filet de sécurité)"
+              >
+                <Download size={14} /> Créer un snapshot daté maintenant
               </button>
               <button
                 className="mc-btn mc-btn-ghost"
@@ -6279,6 +6398,7 @@ export default function LaTambouille() {
 
           setArticles(migrateArticlesForStock(loadedArticles));
           setRecipes(migrateRecipesForPlateCost(loadedRecipes));
+          setMenus(loadedMenus);
           setPurchases(migratePurchasesForStock(loadedPurchases));
           setSales(await storageGet(STORAGE_KEYS.sales, DEMO_SALES));
           setInventories(loadedInventories);
