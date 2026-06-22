@@ -145,6 +145,7 @@ import {
   Settings,
   Copy,
   ArrowUpDown,
+  ChevronDown,
 } from 'lucide-react';
 import {
   BarChart,
@@ -6605,7 +6606,7 @@ export default function LaTambouille() {
     { id: 'energy',     label: 'Énergie',           icon: Zap               },
     { id: 'report',     label: 'Rapport',           icon: ClipboardList     },
     { id: 'sales',      label: 'Ventes CLYO',       icon: Upload,           locked: phase1Mode },
-    { id: 'analytics',  label: 'Analyses',          icon: TrendingUp,       locked: phase1Mode },
+    { id: 'analytics',  label: 'Analyses',          icon: TrendingUp        },
     { id: 'simulator',  label: 'Simulateur',        icon: Star              },
     { id: 'settings',   label: 'Réglages',          icon: Settings          },
   ];
@@ -6822,11 +6823,7 @@ export default function LaTambouille() {
           {activeTab === 'report' && <ReportView context={context} />}
           {/* Sales stays accessible even in phase 1 — it's how the user activates phase 2 */}
           {activeTab === 'sales' && <SalesView context={context} />}
-          {activeTab === 'analytics' && (
-            phase1Mode
-              ? <Phase1LockScreen viewName="Analyses" onGoToSales={() => setActiveTab('sales')} />
-              : <AnalyticsView context={context} />
-          )}
+          {activeTab === 'analytics' && <AnalyticsView context={context} />}
           {activeTab === 'simulator' && <SimulatorView context={context} />}
           {activeTab === 'settings' && <SettingsView context={context} />}
         </ErrorBoundary>
@@ -15985,8 +15982,93 @@ function SalesView({ context }) {
 //   ANALYTICS VIEW
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Sélecteur d'article avec recherche (remplace un <select> de 178 articles).
+// `options` = articles enrichis { id, name, _purchaseCount }, déjà triés.
+function ArticleSearchSelect({ options, value, onChange }) {
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  const selected = options.find((o) => o.id === value);
+
+  // Ferme le menu au clic extérieur
+  useEffect(() => {
+    const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = normalizeText(search);
+    if (!q) return options;
+    return options.filter((o) => normalizeText(o.name).includes(q));
+  }, [options, search]);
+
+  return (
+    <div ref={ref} style={{ position: 'relative', minWidth: 260, maxWidth: '100%' }}>
+      <div
+        onClick={() => { setOpen((v) => !v); setSearch(''); }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 12px', border: `1px solid ${palette.rule}`,
+          borderRadius: 6, background: palette.cream, cursor: 'pointer', fontSize: 13,
+        }}
+      >
+        <Search size={14} style={{ color: palette.inkSoft, flexShrink: 0 }} />
+        <span style={{ flex: 1, color: selected ? palette.ink : palette.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {selected ? selected.name : 'Choisir un article…'}
+        </span>
+        <ChevronDown size={14} style={{ color: palette.inkSoft, flexShrink: 0 }} />
+      </div>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 20,
+          background: 'white', border: `1px solid ${palette.rule}`, borderRadius: 8,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.12)', maxHeight: 320, overflow: 'hidden',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{ padding: 8, borderBottom: `1px solid ${palette.rule}` }}>
+            <input
+              autoFocus
+              className="mc-input"
+              placeholder="Rechercher un article…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ fontSize: 13 }}
+            />
+          </div>
+          <div style={{ overflowY: 'auto' }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: 16, textAlign: 'center', fontSize: 13, color: palette.inkSoft }}>
+                Aucun article trouvé
+              </div>
+            ) : filtered.map((o) => (
+              <div
+                key={o.id}
+                onClick={() => { onChange(o.id); setOpen(false); }}
+                style={{
+                  padding: '8px 12px', cursor: 'pointer', fontSize: 13,
+                  display: 'flex', justifyContent: 'space-between', gap: 8,
+                  background: o.id === value ? palette.paper : 'transparent',
+                }}
+                onMouseEnter={(e) => { if (o.id !== value) e.currentTarget.style.background = palette.cream; }}
+                onMouseLeave={(e) => { if (o.id !== value) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ color: palette.ink }}>{o.name}</span>
+                <span style={{ color: palette.inkSoft, fontSize: 11, flexShrink: 0 }}>{o._purchaseCount} achats</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AnalyticsView({ context }) {
   const { articles, recipes, sales, purchases, priceIndex, dateFrom, dateTo } = context;
+  const isMobile = useIsMobile(720);
 
   // ─── Article selector for price evolution chart ─────────────────────
   // Default to the article with the most purchases — most likely to be
@@ -16093,9 +16175,180 @@ function AnalyticsView({ context }) {
       });
   }, [recipes, sales, priceIndex, dateFrom, dateTo]);
 
+  // ─── Optimiseur fournisseur ───────────────────────────────────────────
+  // Pour chaque article acheté chez ≥ 2 fournisseurs sur la période choisie,
+  // compare le prix moyen pondéré par fournisseur. Calcule l'écart entre ce
+  // qui a été réellement dépensé et le "tout au moins cher" théorique.
+  // Période INDÉPENDANTE du filtre global (sélecteur dédié ci-dessous).
+  const [optimizerPeriod, setOptimizerPeriod] = useState('12'); // '3' | '6' | '12' | 'all'
+  const optimizerData = useMemo(() => {
+    const now = new Date();
+    let since = null;
+    if (optimizerPeriod !== 'all') {
+      const months = parseInt(optimizerPeriod, 10);
+      const d = new Date(now.getFullYear(), now.getMonth() - months, now.getDate());
+      since = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    // article -> supplier -> { value, qty }
+    const byArticle = {};
+    for (const p of purchases) {
+      if (since && (p.date || '') < since) continue;
+      const sup = (p.supplier || 'Inconnu').trim() || 'Inconnu';
+      for (const it of (p.items || [])) {
+        const aid = it.articleId;
+        if (!aid || !(it.pricePerMasterUnit > 0) || !(it.convertedQty > 0)) continue;
+        const a = (byArticle[aid] = byArticle[aid] || {});
+        const s = (a[sup] = a[sup] || { value: 0, qty: 0 });
+        s.value += it.pricePerMasterUnit * it.convertedQty;
+        s.qty += it.convertedQty;
+      }
+    }
+
+    const rows = [];
+    let totalSaving = 0;
+    let totalActual = 0;
+    for (const [aid, sups] of Object.entries(byArticle)) {
+      const supNames = Object.keys(sups);
+      if (supNames.length < 2) continue; // besoin d'au moins 2 fournisseurs
+      const article = articles.find((x) => x.id === aid);
+      if (!article) continue;
+
+      const prices = supNames.map((s) => ({
+        supplier: s,
+        price: sups[s].value / sups[s].qty,
+        qty: sups[s].qty,
+        spent: sups[s].value,
+      })).sort((a, b) => a.price - b.price);
+
+      const cheapest = prices[0];
+      const totalQty = prices.reduce((sum, p) => sum + p.qty, 0);
+      const actualSpend = prices.reduce((sum, p) => sum + p.spent, 0);
+      const idealSpend = cheapest.price * totalQty;
+      const saving = actualSpend - idealSpend;
+
+      totalActual += actualSpend;
+      if (saving > 1) {
+        totalSaving += saving;
+        rows.push({
+          id: aid,
+          name: article.name,
+          unit: article.unit,
+          totalQty,
+          actualSpend,
+          idealSpend,
+          saving,
+          cheapest,
+          prices,
+        });
+      }
+    }
+    rows.sort((a, b) => b.saving - a.saving);
+    return { rows, totalSaving, totalActual };
+  }, [purchases, articles, optimizerPeriod]);
+
+  const OPTIMIZER_PERIOD_LABELS = { '3': '3 mois', '6': '6 mois', '12': '12 mois', 'all': 'Tout' };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Analyses</h2>
+      <div>
+        <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Analyses</h2>
+        <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>
+          Optimisation des achats, évolution des prix et rentabilité des recettes
+        </div>
+      </div>
+
+      {/* ── Optimiseur fournisseur ──────────────────────────────────── */}
+      <div className="mc-card" style={{ padding: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
+          <div>
+            <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
+              Optimiseur fournisseur
+            </h3>
+            <div style={{ fontSize: 12, color: palette.inkSoft, maxWidth: 560 }}>
+              Pour chaque article acheté chez plusieurs fournisseurs, économie potentielle si tout avait été acheté au prix le plus bas. Un repère de négociation, pas une cible absolue — un fournisseur ne suit pas toujours sur les gros volumes.
+            </div>
+          </div>
+          <SegmentedToggle
+            size="sm"
+            value={optimizerPeriod}
+            onChange={setOptimizerPeriod}
+            options={[
+              { id: '3',   label: '3 m' },
+              { id: '6',   label: '6 m' },
+              { id: '12',  label: '12 m' },
+              { id: 'all', label: 'Tout' },
+            ]}
+          />
+        </div>
+
+        {optimizerData.rows.length === 0 ? (
+          <EmptyState
+            icon={TrendingUp}
+            title="Pas d'écart détecté"
+            description={`Sur ${OPTIMIZER_PERIOD_LABELS[optimizerPeriod]}, aucun article n'a été acheté chez plusieurs fournisseurs à des prix différents. L'optimiseur a besoin d'achats comparables pour fonctionner.`}
+          />
+        ) : (
+          <>
+            {/* Bandeau récapitulatif */}
+            <div style={{
+              display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'baseline',
+              padding: '14px 18px', marginBottom: 16,
+              background: palette.sage + '12', border: `1px solid ${palette.sage}30`, borderRadius: 8,
+            }}>
+              <div>
+                <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>Économie potentielle</div>
+                <div className="mc-display" style={{ fontSize: 30, fontWeight: 700, color: palette.sage }}>
+                  {formatEuro(optimizerData.totalSaving)}
+                </div>
+              </div>
+              <div style={{ fontSize: 13, color: palette.inkSoft }}>
+                sur <strong>{optimizerData.rows.length}</strong> article{optimizerData.rows.length > 1 ? 's' : ''} multi-fournisseurs ·
+                {' '}soit <strong>{optimizerData.totalActual > 0 ? ((optimizerData.totalSaving / optimizerData.totalActual) * 100).toFixed(1) : '0'} %</strong> de ces achats
+              </div>
+            </div>
+
+            {/* Liste des opportunités */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {optimizerData.rows.slice(0, 15).map((row) => (
+                <div key={row.id} style={{ border: `1px solid ${palette.rule}`, borderRadius: 8, padding: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>{row.name}</div>
+                    <div style={{ display: 'flex', gap: 16, alignItems: 'baseline' }}>
+                      <span style={{ fontSize: 12, color: palette.inkSoft }}>
+                        {row.totalQty.toFixed(0)} {row.unit} · dépensé {formatEuro(row.actualSpend)}
+                      </span>
+                      <span className="mc-display" style={{ fontSize: 18, fontWeight: 700, color: palette.sage }}>
+                        −{formatEuro(row.saving)}
+                      </span>
+                    </div>
+                  </div>
+                  {/* Prix par fournisseur */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {row.prices.map((p, i) => (
+                      <span key={p.supplier} style={{
+                        fontSize: 12, padding: '3px 10px', borderRadius: 12,
+                        background: i === 0 ? palette.sage + '20' : palette.paper,
+                        color: i === 0 ? palette.sage : palette.inkSoft,
+                        fontWeight: i === 0 ? 600 : 400,
+                        border: i === 0 ? `1px solid ${palette.sage}40` : `1px solid ${palette.rule}`,
+                      }}>
+                        {i === 0 ? '✓ ' : ''}{p.supplier} · {formatEuro(p.price)}/{row.unit}
+                        {p.qty > 0 && <span style={{ opacity: 0.7 }}> ({p.qty.toFixed(0)})</span>}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {optimizerData.rows.length > 15 && (
+                <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic', textAlign: 'center' }}>
+                  + {optimizerData.rows.length - 15} autres articles avec un écart plus faible
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* ── Évolution du prix moyen par article ─────────────────────── */}
       <div className="mc-card" style={{ padding: 20 }}>
@@ -16109,26 +16362,11 @@ function AnalyticsView({ context }) {
             </div>
           </div>
           {articlesByPurchaseCount.length > 0 && (
-            <select
-              value={selectedArticleId || ''}
-              onChange={(e) => setSelectedArticleId(e.target.value)}
-              style={{
-                padding: '8px 12px',
-                border: `1px solid ${palette.rule}`,
-                borderRadius: 6,
-                background: palette.cream,
-                fontFamily: 'inherit',
-                fontSize: 13,
-                minWidth: 240,
-                maxWidth: '100%',
-              }}
-            >
-              {articlesByPurchaseCount.map((ing) => (
-                <option key={ing.id} value={ing.id}>
-                  {ing.name} ({ing._purchaseCount} achats)
-                </option>
-              ))}
-            </select>
+            <ArticleSearchSelect
+              options={articlesByPurchaseCount}
+              value={selectedArticleId}
+              onChange={setSelectedArticleId}
+            />
           )}
         </div>
 
@@ -16220,20 +16458,88 @@ function AnalyticsView({ context }) {
       </div>
 
       <div className="mc-card" style={{ padding: 20 }}>
-        <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 16px' }}>
+        <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
           Achats par catégorie
         </h3>
-        {spendByCategory.length > 0 ? (
-          <ResponsiveContainer width="100%" height={260}>
-            <PieChart>
-              <Pie data={spendByCategory} dataKey="value" nameKey="name" outerRadius={90} label={(e) => e.name}>
-                {spendByCategory.map((_, i) => <Cell key={i} fill={chartColors[i % chartColors.length]} />)}
-              </Pie>
-              <Tooltip formatter={(v) => formatEuro(v)} contentStyle={{ background: palette.cream, border: `1px solid ${palette.rule}`, borderRadius: 6, fontSize: 12 }} />
-            </PieChart>
-          </ResponsiveContainer>
-        ) : (
-          <div style={{ textAlign: 'center', padding: 48, color: palette.inkSoft }}>—</div>
+        <div style={{ fontSize: 12, color: palette.inkSoft, marginBottom: 16 }}>
+          Répartition des dépenses sur la période sélectionnée
+        </div>
+        {spendByCategory.length > 0 ? (() => {
+          const sorted = [...spendByCategory].sort((a, b) => b.value - a.value);
+          const total = sorted.reduce((s, c) => s + c.value, 0);
+          const withColor = sorted.map((c, i) => ({ ...c, color: chartColors[i % chartColors.length] }));
+          return (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : 'minmax(220px, 280px) 1fr',
+              gap: 24,
+              alignItems: 'center',
+            }}>
+              {/* Donut avec total au centre */}
+              <div style={{ position: 'relative', width: '100%', minHeight: 240 }}>
+                <ResponsiveContainer width="100%" height={240}>
+                  <PieChart>
+                    <Pie
+                      data={withColor}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={70}
+                      outerRadius={105}
+                      paddingAngle={2}
+                      stroke="none"
+                    >
+                      {withColor.map((c) => <Cell key={c.name} fill={c.color} />)}
+                    </Pie>
+                    <Tooltip
+                      formatter={(v) => formatEuro(v)}
+                      contentStyle={{ background: palette.cream, border: `1px solid ${palette.rule}`, borderRadius: 6, fontSize: 12 }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                {/* Total au centre */}
+                <div style={{
+                  position: 'absolute', top: '50%', left: '50%',
+                  transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none',
+                }}>
+                  <div style={{ fontSize: 10, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>Total</div>
+                  <div className="mc-display" style={{ fontSize: 22, fontWeight: 700, color: palette.ink, lineHeight: 1.1 }}>
+                    {formatEuro(total)}
+                  </div>
+                  <div style={{ fontSize: 10, color: palette.inkSoft }}>{sorted.length} catégories</div>
+                </div>
+              </div>
+
+              {/* Légende riche : pastille + nom + montant + % + mini-barre */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {withColor.map((cat) => {
+                  const pct = total > 0 ? (cat.value / total) * 100 : 0;
+                  return (
+                    <div key={cat.name}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 13, marginBottom: 4, gap: 8 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                          <span style={{ width: 11, height: 11, borderRadius: 3, background: cat.color, flexShrink: 0 }} />
+                          <span style={{ color: palette.ink, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat.name}</span>
+                        </span>
+                        <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, flexShrink: 0 }}>
+                          {formatEuro(cat.value)}
+                          <span style={{ fontWeight: 400, color: palette.inkSoft, fontSize: 11, marginLeft: 6 }}>{pct.toFixed(1)} %</span>
+                        </span>
+                      </div>
+                      <div style={{ height: 5, background: palette.paper, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: cat.color, borderRadius: 3, transition: 'width 0.3s ease' }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })() : (
+          <div style={{ textAlign: 'center', padding: 48, color: palette.inkSoft }}>
+            Aucun achat sur la période sélectionnée.
+          </div>
         )}
       </div>
 
@@ -16243,6 +16549,21 @@ function AnalyticsView({ context }) {
             Matrice de rentabilité
           </h3>
         </div>
+        {sales.length === 0 ? (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 12,
+            padding: '14px 16px', background: palette.amber + '10',
+            border: `1px solid ${palette.amber}30`, borderRadius: 8,
+            fontSize: 13, color: palette.inkSoft, lineHeight: 1.5,
+          }}>
+            <Lock size={16} style={{ color: palette.amber, flexShrink: 0, marginTop: 2 }} />
+            <span>
+              <strong>En attente des ventes.</strong> La rentabilité par recette (ventes, CA, marge totale)
+              s'activera une fois vos ventes CLYO importées. L'optimiseur fournisseur et l'évolution des prix
+              ci-dessus fonctionnent dès maintenant — ils ne dépendent que de vos achats.
+            </span>
+          </div>
+        ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
@@ -16270,6 +16591,7 @@ function AnalyticsView({ context }) {
               ))}
           </tbody>
         </table>
+        )}
       </div>
     </div>
   );
