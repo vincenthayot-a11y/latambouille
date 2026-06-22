@@ -9868,15 +9868,21 @@ function MenusView({ context }) {
   const { menus, setMenus, recipes, priceIndex } = context;
   const [editingMenu, setEditingMenu] = useState(null);
 
+  // Coût d'une recette dans le contexte d'un menu.
+  // On passe par indexedPlateCost (et NON indexedRecipeCost) pour que les plats
+  // qui incluent l'assortiment d'assiette (riz, banane, igname, papaye) soient
+  // chiffrés avec le même coût que dans la vue Recettes — sinon le plat est
+  // sous-évalué dans le menu. indexedPlateCost gère déjà la division par portion
+  // et l'ajout de l'assortiment quand recipe.includesAssortment est vrai.
+  const assortmentBase = useMemo(() => findAssortmentBase(recipes), [recipes]);
   const recipeCost = useCallback((recipeId) => {
     if (!recipeId) return null;
     const recipe = recipes.find((r) => r.id === recipeId);
     if (!recipe) return null;
-    const total = indexedRecipeCost(recipe, priceIndex);
-    if (!(total > 0)) return null;
-    const portions = recipe.yieldPortions > 0 ? recipe.yieldPortions : 1;
-    return total / portions;
-  }, [recipes, priceIndex]);
+    const breakdown = indexedPlateCost(recipe, priceIndex, assortmentBase);
+    if (!(breakdown.plateCost > 0)) return null;
+    return breakdown.plateCost;
+  }, [recipes, priceIndex, assortmentBase]);
 
   const menuCosts = useCallback((menu) => {
     const platCost = recipeCost(menu.platId);
@@ -9996,7 +10002,10 @@ function MenusView({ context }) {
               <div style={{ padding: '14px 20px', background: palette.paper }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Plat (unique)</div>
                 {!plat ? <div style={{ fontSize: 12, color: palette.wine }}>Non défini</div>
-                  : <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600 }}><span>{plat.name}</span><span style={{ fontFamily: 'Fraunces, serif' }}>{costs ? formatEuro(costs.platCost) : '—'}</span></div>}
+                  : <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600 }}><span>{plat.name}</span><span style={{ fontFamily: 'Fraunces, serif' }}>{costs ? formatEuro(costs.platCost) : '—'}</span></div>
+                      {plat.includesAssortment && <div style={{ fontSize: 10, color: palette.sage, marginTop: 2 }}>+ assortiment d'assiette inclus</div>}
+                    </div>}
               </div>
               <div style={{ background: palette.rule }} />
               <div style={{ padding: '14px 20px' }}>
