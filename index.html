@@ -146,6 +146,7 @@ import {
   Copy,
   ArrowUpDown,
   ChevronDown,
+  CalendarDays,
 } from 'lucide-react';
 import {
   BarChart,
@@ -184,6 +185,7 @@ const STORAGE_KEYS = {
   assets: 'mc5:assets',                            // gros équipement (frigo, four, …)
   assetMaintenance: 'mc5:assetMaintenance',        // contrats d'entretien (récurrents)
   assetInterventions: 'mc5:assetInterventions',    // pannes & réparations ponctuelles
+  platsDuJour: 'mc5:platsDuJour',                   // planning des plats du jour par date
   initialized: 'mc5:initialized',
   aiModel: 'mc5:aiModel',
   scanPrompt: 'mc5:scanPrompt',
@@ -5855,7 +5857,7 @@ function CommandPalette({ isOpen, onClose, articles, recipes, setActiveTab }) {
 
 const SIDEBAR_SECTIONS = [
   { id: 'home',      label: null,         items: ['dashboard'] },
-  { id: 'quotidien', label: 'Quotidien',  items: ['articles', 'recipes', 'purchases', 'stocks', 'alerts', 'sales', 'energy', 'equipment'] },
+  { id: 'quotidien', label: 'Quotidien',  items: ['articles', 'recipes', 'platsdujour', 'purchases', 'stocks', 'alerts', 'sales', 'energy', 'equipment'] },
   { id: 'pilotage',  label: 'Pilotage',   items: ['report', 'analytics', 'simulator'] },
 ];
 
@@ -6329,6 +6331,7 @@ export default function LaTambouille() {
   const [assets, setAssets] = useState([]);
   const [assetMaintenance, setAssetMaintenance] = useState([]);
   const [assetInterventions, setAssetInterventions] = useState([]);
+  const [platsDuJour, setPlatsDuJour] = useState({});  // { 'YYYY-MM-DD': [{ id, recipeId, name, ingredients:[] }] }
   const [alertSettings, setAlertSettings] = useState(() => mergeAlertSettings(null));
   // Réglages utilisateur : catégories personnalisées + seuils paramétrables.
   // Initialisés aux défauts ; remplacés au boot s'il existe une version
@@ -6394,6 +6397,7 @@ export default function LaTambouille() {
           const loadedAssets = await storageGet(STORAGE_KEYS.assets, []);
           const loadedAssetMaintenance = await storageGet(STORAGE_KEYS.assetMaintenance, []);
           const loadedAssetInterventions = await storageGet(STORAGE_KEYS.assetInterventions, []);
+          const loadedPlatsDuJour = await storageGet(STORAGE_KEYS.platsDuJour, {});
           const loadedAlertSettings = await storageGet(STORAGE_KEYS.alertSettings, null);
           console.log('[BOOT] data loaded, migrating');
 
@@ -6410,6 +6414,7 @@ export default function LaTambouille() {
           setAssets(loadedAssets);
           setAssetMaintenance(loadedAssetMaintenance);
           setAssetInterventions(loadedAssetInterventions);
+          setPlatsDuJour(loadedPlatsDuJour && typeof loadedPlatsDuJour === 'object' ? loadedPlatsDuJour : {});
           if (loadedAlertSettings) setAlertSettings(mergeAlertSettings(loadedAlertSettings));
           // Chargement des réglages utilisateur (avec fallback sur défauts)
           const loadedUserSettings = await storageGet(STORAGE_KEYS.userSettings, null);
@@ -6454,6 +6459,7 @@ export default function LaTambouille() {
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.assets, assets); }, [assets, isReady]);
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.assetMaintenance, assetMaintenance); }, [assetMaintenance, isReady]);
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.assetInterventions, assetInterventions); }, [assetInterventions, isReady]);
+  useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.platsDuJour, platsDuJour); }, [platsDuJour, isReady]);
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.alertSettings, alertSettings); }, [alertSettings, isReady]);
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.sidebarCollapsed, sidebarCollapsed); }, [sidebarCollapsed, isReady]);
   useEffect(() => { if (isReady) storageSet(STORAGE_KEYS.userSettings, userSettings); }, [userSettings, isReady]);
@@ -6599,6 +6605,7 @@ export default function LaTambouille() {
     { id: 'dashboard',  label: 'Tableau de bord',   icon: LayoutDashboard, locked: phase1Mode },
     { id: 'articles',   label: 'Catalogue',         icon: Package           },
     { id: 'recipes',    label: 'Recettes',          icon: FileText          },
+    { id: 'platsdujour', label: 'Plats du jour',    icon: CalendarDays      },
     { id: 'purchases',  label: 'Achats & Factures', icon: ShoppingCart      },
     { id: 'stocks',     label: 'Stocks',            icon: Box               },
     { id: 'alerts',     label: 'Alertes',           icon: AlertCircle       },
@@ -6639,6 +6646,7 @@ export default function LaTambouille() {
     assets, setAssets,
     assetMaintenance, setAssetMaintenance,
     assetInterventions, setAssetInterventions,
+    platsDuJour, setPlatsDuJour,
     alertSettings, setAlertSettings,
     // Réglages utilisateur : exposés comme objets, et raccourcis dérivés vers
     // les listes pour éviter les usages `context.userSettings.xxx` verbeux
@@ -6815,6 +6823,7 @@ export default function LaTambouille() {
           )}
           {activeTab === 'articles' && <ArticlesView context={context} />}
           {activeTab === 'recipes' && <RecipesView context={context} />}
+          {activeTab === 'platsdujour' && <PlatsDuJourView context={context} />}
           {activeTab === 'purchases' && <PurchasesView context={context} />}
           {activeTab === 'stocks' && <StocksView context={context} />}
           {activeTab === 'equipment' && <EquipmentView context={context} />}
@@ -8836,6 +8845,532 @@ function ArticleMergeModal({
           >
             <Link2 size={14} /> Confirmer la fusion
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   PLATS DU JOUR VIEW
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PDJ_JOURS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+const PDJ_MOIS = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+
+// Clé date locale 'YYYY-MM-DD' (pas d'UTC : Martinique UTC-4)
+function pdjDateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Modale de sélection de recette (recherche). En modale plutôt qu'en dropdown
+// absolu car les cartes-jour ont overflow:hidden qui tronquait le menu.
+function RecipePicker({ recipes, onPick, onClose }) {
+  const [search, setSearch] = useState('');
+  const filtered = useMemo(() => {
+    const q = normalizeText(search);
+    const sellable = recipes.filter((r) => !r.isAssortmentBase);
+    if (!q) return sellable;
+    return sellable.filter((r) => normalizeText(r.name).includes(q));
+  }, [recipes, search]);
+  return (
+    <div className="mc-overlay" onClick={onClose}>
+      <div className="mc-modal" style={{ maxWidth: 460, maxHeight: '80vh', display: 'flex', flexDirection: 'column', padding: 0 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ padding: 16, borderBottom: `1px solid ${palette.rule}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Choisir une recette</h3>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: palette.inkSoft, fontSize: 18 }}>✕</button>
+          </div>
+          <input autoFocus className="mc-input" placeholder="Rechercher une recette…" value={search}
+            onChange={(e) => setSearch(e.target.value)} style={{ fontSize: 13 }} />
+        </div>
+        <div style={{ overflowY: 'auto', padding: 8 }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: 20, textAlign: 'center', fontSize: 13, color: palette.inkSoft }}>Aucune recette trouvée</div>
+          ) : filtered.map((r) => (
+            <div key={r.id} onClick={() => onPick(r)}
+              style={{ padding: '10px 12px', cursor: 'pointer', fontSize: 13, display: 'flex', justifyContent: 'space-between', gap: 8, borderRadius: 6 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = palette.cream}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+              <span style={{ color: palette.ink, fontWeight: 500 }}>{r.name}</span>
+              <span style={{ color: palette.inkSoft, fontSize: 11 }}>{r.category}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Éditeur d'ingrédients dosés pour un plat libre — comme l'éditeur de recette :
+// chaque ligne = un article du catalogue + une quantité. Sert à transformer le
+// plat libre en vraie recette.
+function FreePlatIngredientEditor({ articles, priceIndex, current, onSave, onClose }) {
+  const [lines, setLines] = useState(current && current.length ? current.map((l) => ({ ...l })) : []);
+  const [search, setSearch] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const articleById = useMemo(() => {
+    const m = {}; for (const a of articles) m[a.id] = a; return m;
+  }, [articles]);
+
+  const filtered = useMemo(() => {
+    const q = normalizeText(search);
+    const chosen = new Set(lines.map((l) => l.id));
+    const pool = articles.filter((a) => !chosen.has(a.id));
+    if (!q) return pool.slice(0, 50);
+    return pool.filter((a) => normalizeText(a.name).includes(q)).slice(0, 50);
+  }, [articles, search, lines]);
+
+  const addLine = (articleId) => {
+    setLines((prev) => [...prev, { id: articleId, qty: 0 }]);
+    setSearch(''); setAdding(false);
+  };
+  const setQty = (id, qty) => setLines((prev) => prev.map((l) => l.id === id ? { ...l, qty } : l));
+  const removeLine = (id) => setLines((prev) => prev.filter((l) => l.id !== id));
+
+  // Coût total estimé sur les prix connus
+  const totalCost = useMemo(() => {
+    let c = 0;
+    for (const l of lines) {
+      const pr = priceIndex && priceIndex[l.id];
+      const unit = typeof pr === 'number' ? pr : (pr && pr.price);
+      if (unit > 0 && l.qty > 0) c += unit * l.qty;
+    }
+    return c;
+  }, [lines, priceIndex]);
+
+  return (
+    <div className="mc-overlay" onClick={onClose}>
+      <div className="mc-modal" style={{ maxWidth: 520, maxHeight: '85vh', display: 'flex', flexDirection: 'column', padding: 0 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ padding: 16, borderBottom: `1px solid ${palette.rule}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Composition du plat</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: palette.inkSoft, fontSize: 18 }}>✕</button>
+        </div>
+
+        <div style={{ overflowY: 'auto', padding: 16, flex: 1 }}>
+          {/* Lignes d'ingrédients dosés */}
+          {lines.length === 0 ? (
+            <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic', marginBottom: 12 }}>
+              Aucun ingrédient. Ajoutez-en pour composer la recette.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+              {lines.map((l) => {
+                const a = articleById[l.id];
+                return (
+                  <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1, fontSize: 13, color: palette.ink }}>{a ? a.name : 'Article inconnu'}</span>
+                    <input type="number" className="mc-input" value={l.qty || ''} min="0" step="0.01"
+                      onChange={(e) => setQty(l.id, parseFloat(e.target.value) || 0)}
+                      style={{ width: 90, fontSize: 13, textAlign: 'right' }} />
+                    <span style={{ fontSize: 12, color: palette.inkSoft, width: 36 }}>{a ? a.unit : ''}</span>
+                    <button onClick={() => removeLine(l.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: palette.wine, fontSize: 13 }}>✕</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Ajout d'un ingrédient */}
+          {adding ? (
+            <div style={{ border: `1px solid ${palette.rule}`, borderRadius: 8, overflow: 'hidden' }}>
+              <input autoFocus className="mc-input" placeholder="Rechercher un article du catalogue…" value={search}
+                onChange={(e) => setSearch(e.target.value)} style={{ fontSize: 13, border: 'none', borderBottom: `1px solid ${palette.rule}`, borderRadius: 0 }} />
+              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                {filtered.length === 0 ? (
+                  <div style={{ padding: 14, textAlign: 'center', fontSize: 12, color: palette.inkSoft }}>Aucun article</div>
+                ) : filtered.map((a) => (
+                  <div key={a.id} onClick={() => addLine(a.id)}
+                    style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 13, display: 'flex', justifyContent: 'space-between', gap: 8 }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = palette.cream}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                    <span style={{ color: palette.ink }}>{a.name}</span>
+                    <span style={{ color: palette.inkSoft, fontSize: 11 }}>{a.category}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <button className="mc-btn mc-btn-ghost" style={{ fontSize: 13, width: '100%' }} onClick={() => setAdding(true)}>
+              <Plus size={13} /> Ajouter un ingrédient
+            </button>
+          )}
+        </div>
+
+        <div style={{ padding: 12, borderTop: `1px solid ${palette.rule}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, color: palette.inkSoft }}>
+            Coût estimé : <strong style={{ fontFamily: 'Fraunces, serif', color: palette.ink }}>{formatEuro(totalCost)}</strong>
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="mc-btn mc-btn-ghost" onClick={onClose}>Annuler</button>
+            <button className="mc-btn mc-btn-primary" onClick={() => { onSave(lines.filter((l) => l.qty > 0)); onClose(); }}>
+              Valider
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlatsDuJourView({ context }) {
+  const { platsDuJour, setPlatsDuJour, recipes, setRecipes, articles, priceIndex } = context;
+  const isMobile = useIsMobile(720);
+
+  const now = new Date();
+  const [curYear, setCurYear] = useState(now.getFullYear());
+  const [curMonth, setCurMonth] = useState(now.getMonth());
+  // Jours actifs (0=dim … 6=sam). Défaut : tous les jours.
+  const [activeDays, setActiveDays] = useState([0, 1, 2, 3, 4, 5, 6]);
+  const [pickerFor, setPickerFor] = useState(null); // clé "dateKey:platId" pour lequel le picker est ouvert
+  const [ingredientPickerFor, setIngredientPickerFor] = useState(null); // { key, platId } pour l'éditeur d'ingrédients
+  const [showPrint, setShowPrint] = useState(false);
+
+  const assortmentBase = useMemo(() => findAssortmentBase(recipes), [recipes]);
+
+  // Jours du mois filtrés sur les jours actifs
+  const monthDays = useMemo(() => {
+    const days = [];
+    const d = new Date(curYear, curMonth, 1);
+    while (d.getMonth() === curMonth) {
+      if (activeDays.includes(d.getDay())) days.push(new Date(d));
+      d.setDate(d.getDate() + 1);
+    }
+    return days;
+  }, [curYear, curMonth, activeDays]);
+
+  const todayKey = pdjDateKey(new Date());
+
+  // ─── Mutations ────────────────────────────────────────────────────────
+  const updateDay = (key, platsArr) => {
+    setPlatsDuJour((prev) => {
+      const next = { ...prev };
+      if (platsArr.length === 0) delete next[key];
+      else next[key] = platsArr;
+      return next;
+    });
+  };
+  const addPlatFromRecipe = (key, recipe) => {
+    const ingredients = (recipe.articles || []).map((line) => {
+      const a = articles.find((x) => x.id === line.id);
+      return a ? a.name : null;
+    }).filter(Boolean);
+    const plat = { id: generateId('pdj'), recipeId: recipe.id, name: recipe.name, ingredients };
+    updateDay(key, [...(platsDuJour[key] || []), plat]);
+    setPickerFor(null);
+  };
+  const addFreePlat = (key) => {
+    const plat = { id: generateId('pdj'), recipeId: null, name: '', articles: [] };
+    updateDay(key, [...(platsDuJour[key] || []), plat]);
+  };
+  const updatePlat = (key, platId, patch) => {
+    updateDay(key, (platsDuJour[key] || []).map((p) => p.id === platId ? { ...p, ...patch } : p));
+  };
+  const removePlat = (key, platId) => {
+    updateDay(key, (platsDuJour[key] || []).filter((p) => p.id !== platId));
+  };
+
+  // Promotion d'un plat libre en recette du catalogue
+  const promoteToRecipe = (key, plat) => {
+    const lines = plat.articles || [];
+    if (!plat.name || !plat.name.trim()) {
+      mcToast.error('Donnez un nom au plat avant de créer la recette.');
+      return;
+    }
+    if (lines.length === 0) {
+      mcToast.error('Ajoutez au moins un ingrédient dosé avant de créer la recette.');
+      return;
+    }
+    const newRecipe = {
+      id: generateId('r'),
+      name: plat.name.trim(),
+      category: 'Plat',
+      salePrice: 0,
+      yieldPortions: 1,
+      includesAssortment: false,
+      articles: lines.map((l) => ({ id: l.id, qty: l.qty })),
+    };
+    setRecipes([...recipes, newRecipe]);
+    // Transforme le plat libre en plat lié à la nouvelle recette
+    const ingredientNames = lines.map((l) => {
+      const a = articles.find((x) => x.id === l.id);
+      return a ? a.name : null;
+    }).filter(Boolean);
+    updatePlat(key, plat.id, { recipeId: newRecipe.id, articles: undefined, ingredients: ingredientNames });
+    mcToast.success(`Recette créée : ${newRecipe.name}. Définissez son prix de vente dans l'onglet Recettes.`);
+  };
+
+  const monthHasContent = monthDays.some((d) => (platsDuJour[pdjDateKey(d)] || []).length > 0);
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: 12, marginBottom: 20, flexDirection: isMobile ? 'column' : 'row' }}>
+        <div>
+          <h2 className="mc-display" style={{ fontSize: isMobile ? 20 : 24, fontWeight: 600, margin: 0 }}>Plats du jour</h2>
+          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>
+            Planning mensuel · liez vos recettes ou créez des plats innovants
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="mc-btn mc-btn-ghost" onClick={() => { let m = curMonth - 1, y = curYear; if (m < 0) { m = 11; y--; } setCurMonth(m); setCurYear(y); }} aria-label="Mois précédent">‹</button>
+          <span className="mc-display" style={{ fontSize: 15, fontWeight: 600, minWidth: 140, textAlign: 'center' }}>{PDJ_MOIS[curMonth]} {curYear}</span>
+          <button className="mc-btn mc-btn-ghost" onClick={() => { let m = curMonth + 1, y = curYear; if (m > 11) { m = 0; y++; } setCurMonth(m); setCurYear(y); }} aria-label="Mois suivant">›</button>
+          <button
+            className="mc-btn mc-btn-ghost"
+            onClick={() => setShowPrint(true)}
+            disabled={!monthHasContent}
+            title={monthHasContent ? 'Imprimer le planning du mois' : 'Ajoutez au moins un plat pour imprimer'}
+            style={{ opacity: monthHasContent ? 1 : 0.5, cursor: monthHasContent ? 'pointer' : 'not-allowed' }}
+          >
+            <FileText size={14} /> Imprimer
+          </button>
+        </div>
+      </div>
+
+      {/* Sélecteur de jours actifs */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 20, alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: palette.inkSoft, marginRight: 4 }}>Jours affichés :</span>
+        {PDJ_JOURS.map((label, dayIdx) => {
+          const on = activeDays.includes(dayIdx);
+          return (
+            <button key={dayIdx} onClick={() => setActiveDays((prev) => on ? prev.filter((x) => x !== dayIdx) : [...prev, dayIdx].sort())}
+              style={{
+                padding: '5px 11px', fontSize: 12, borderRadius: 6, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                background: on ? palette.wine : 'transparent', color: on ? '#fff' : palette.inkSoft,
+                border: `1px solid ${on ? palette.wine : palette.rule}`,
+              }}>
+              {label.slice(0, 3)}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Grille des jours */}
+      {monthDays.length === 0 ? (
+        <EmptyState title="Aucun jour affiché" description="Activez au moins un jour de la semaine ci-dessus." />
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
+          {monthDays.map((d) => {
+            const key = pdjDateKey(d);
+            const plats = platsDuJour[key] || [];
+            const isToday = key === todayKey;
+            return (
+              <div key={key} className="mc-card" style={{ padding: 0, overflow: 'hidden', borderColor: isToday ? palette.wine : palette.rule, borderWidth: isToday ? 1.5 : 1 }}>
+                {/* En-tête du jour */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: `1px solid ${palette.rule}`, background: palette.paper + '60' }}>
+                  <span className="mc-display" style={{ fontSize: 24, fontWeight: 700, lineHeight: 1, color: isToday ? palette.wine : palette.ink }}>{d.getDate()}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>{PDJ_JOURS[d.getDay()]}</div>
+                    {isToday && <div style={{ fontSize: 10, color: palette.wine, fontWeight: 600 }}>Aujourd'hui</div>}
+                  </div>
+                </div>
+
+                {/* Plats du jour */}
+                <div style={{ padding: 14 }}>
+                  {plats.map((plat) => {
+                    const linkedRecipe = plat.recipeId ? recipes.find((r) => r.id === plat.recipeId) : null;
+                    let fcLabel = null;
+                    if (linkedRecipe) {
+                      const bd = indexedPlateCost(linkedRecipe, priceIndex, assortmentBase);
+                      if (linkedRecipe.salePrice > 0 && bd.plateCost > 0) {
+                        fcLabel = formatPercent(bd.plateCost / linkedRecipe.salePrice);
+                      }
+                    }
+                    return (
+                      <div key={plat.id} style={{ paddingBottom: 12, marginBottom: 12, borderBottom: `1px solid ${palette.rule}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5, color: linkedRecipe ? palette.sage : palette.amber }}>
+                            {linkedRecipe ? '● Recette liée' : '○ Plat libre'}
+                            {fcLabel && <span style={{ color: palette.inkSoft }}> · FC {fcLabel}</span>}
+                          </span>
+                          <button onClick={() => removePlat(key, plat.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: palette.wine, fontSize: 11, padding: 0 }}>✕</button>
+                        </div>
+
+                        {linkedRecipe ? (
+                          <div style={{ fontSize: 14, fontWeight: 600, color: palette.ink }}>{linkedRecipe.name}</div>
+                        ) : (
+                          <input className="mc-input" placeholder="Nom du plat innovant…" value={plat.name}
+                            onChange={(e) => updatePlat(key, plat.id, { name: e.target.value })}
+                            style={{ fontSize: 14, marginBottom: 6 }} />
+                        )}
+
+                        {/* Composition (recette liée : pour info ; plat libre : éditable et dosée) */}
+                        {linkedRecipe ? (
+                          plat.ingredients && plat.ingredients.length > 0 && (
+                            <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 4 }}>
+                              {plat.ingredients.join(', ')}
+                            </div>
+                          )
+                        ) : (() => {
+                          const freeLines = plat.articles || [];
+                          let freeCost = 0;
+                          for (const l of freeLines) {
+                            const pr = priceIndex && priceIndex[l.id];
+                            const unit = typeof pr === 'number' ? pr : (pr && pr.price);
+                            if (unit > 0 && l.qty > 0) freeCost += unit * l.qty;
+                          }
+                          return (
+                            <>
+                              {freeLines.length > 0 ? (
+                                <div style={{ marginTop: 6, marginBottom: 6 }}>
+                                  {freeLines.map((l) => {
+                                    const a = articles.find((x) => x.id === l.id);
+                                    return (
+                                      <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: palette.inkSoft, padding: '1px 0' }}>
+                                        <span>{a ? a.name : 'Article inconnu'}</span>
+                                        <span>{l.qty} {a ? a.unit : ''}</span>
+                                      </div>
+                                    );
+                                  })}
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: palette.inkSoft, marginTop: 4, paddingTop: 4, borderTop: `1px solid ${palette.rule}` }}>
+                                    <span>Coût estimé</span>
+                                    <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>{formatEuro(freeCost)}</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: 11, color: palette.inkSoft, fontStyle: 'italic', marginTop: 4, marginBottom: 6 }}>
+                                  Aucun ingrédient
+                                </div>
+                              )}
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 10px' }}
+                                  onClick={() => setIngredientPickerFor({ key, platId: plat.id })}>
+                                  <Plus size={12} /> Composition
+                                </button>
+                                {plat.name && freeLines.length > 0 && (
+                                  <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 10px' }}
+                                    onClick={() => promoteToRecipe(key, plat)} title="Transformer ce plat en recette du catalogue">
+                                    <Plus size={12} /> Créer la recette
+                                  </button>
+                                )}
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    );
+                  })}
+
+                  {/* Boutons d'ajout */}
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button className="mc-btn mc-btn-ghost" style={{ fontSize: 12, flex: 1 }}
+                      onClick={() => setPickerFor(key)}>
+                      + Recette
+                    </button>
+                    <button className="mc-btn mc-btn-ghost" style={{ fontSize: 12, flex: 1 }} onClick={() => addFreePlat(key)}>
+                      + Plat libre
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {pickerFor && (
+        <RecipePicker
+          recipes={recipes}
+          onPick={(r) => addPlatFromRecipe(pickerFor, r)}
+          onClose={() => setPickerFor(null)}
+        />
+      )}
+
+      {ingredientPickerFor && (() => {
+        const plat = (platsDuJour[ingredientPickerFor.key] || []).find((p) => p.id === ingredientPickerFor.platId);
+        return (
+          <FreePlatIngredientEditor
+            articles={articles}
+            priceIndex={priceIndex}
+            current={plat ? plat.articles : []}
+            onSave={(lines) => updatePlat(ingredientPickerFor.key, ingredientPickerFor.platId, { articles: lines })}
+            onClose={() => setIngredientPickerFor(null)}
+          />
+        );
+      })()}
+
+      {showPrint && (
+        <PlatsDuJourPrint
+          monthDays={monthDays}
+          platsDuJour={platsDuJour}
+          recipes={recipes}
+          articles={articles}
+          monthLabel={`${PDJ_MOIS[curMonth]} ${curYear}`}
+          onClose={() => setShowPrint(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Vue d'impression des plats du jour (réutilise la zone d'impression .mc-print-zone)
+function PlatsDuJourPrint({ monthDays, platsDuJour, recipes, articles, monthLabel, onClose }) {
+  return (
+    <div className="mc-overlay" onClick={onClose}>
+      <div className="mc-modal" style={{ maxWidth: 900, maxHeight: '90vh', overflow: 'auto', padding: 0 }} onClick={(e) => e.stopPropagation()}>
+        <div className="mc-no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${palette.rule}`, position: 'sticky', top: 0, background: 'white', zIndex: 2 }}>
+          <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Aperçu impression</h3>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="mc-btn mc-btn-ghost" onClick={onClose}>Fermer</button>
+            <button className="mc-btn mc-btn-primary" onClick={() => window.print()}>Imprimer</button>
+          </div>
+        </div>
+        <div className="mc-print-zone" style={{ padding: 24 }}>
+          <div className="mc-print-header" style={{ marginBottom: 16 }}>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 22, fontWeight: 700, color: palette.wine }}>Le Point de Vue</div>
+            <div style={{ fontSize: 14, color: palette.inkSoft }}>Plats du jour — {monthLabel}</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
+            {monthDays.map((d) => {
+              const key = pdjDateKey(d);
+              const plats = platsDuJour[key] || [];
+              if (plats.length === 0) return null;
+              return (
+                <div key={key} className="mc-card" style={{ padding: 14, breakInside: 'avoid' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${palette.rule}` }}>
+                    <span className="mc-display" style={{ fontSize: 20, fontWeight: 700 }}>{d.getDate()}</span>
+                    <span style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5, color: palette.inkSoft }}>{PDJ_JOURS[d.getDay()]}</span>
+                  </div>
+                  {plats.map((plat) => {
+                    const r = plat.recipeId ? recipes.find((x) => x.id === plat.recipeId) : null;
+                    const name = r ? r.name : plat.name;
+                    // Liste d'ingrédients à afficher : recette liée → noms ; plat libre → articles dosés
+                    let ings = [];
+                    if (r) {
+                      ings = (r.articles || []).map((l) => {
+                        const a = articles.find((x) => x.id === l.id);
+                        return a ? a.name : null;
+                      }).filter(Boolean);
+                    } else if (plat.articles && plat.articles.length) {
+                      ings = plat.articles.map((l) => {
+                        const a = articles.find((x) => x.id === l.id);
+                        return a ? `${a.name} — ${l.qty} ${a.unit}` : null;
+                      }).filter(Boolean);
+                    } else if (plat.ingredients) {
+                      ings = plat.ingredients;
+                    }
+                    return (
+                      <div key={plat.id} style={{ marginBottom: 10 }}>
+                        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{name}</div>
+                        {ings.length > 0 && (
+                          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                            {ings.map((ing, i) => (
+                              <li key={i} style={{ fontSize: 12, color: palette.inkSoft, padding: '2px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ width: 4, height: 4, borderRadius: '50%', background: palette.amber, flexShrink: 0 }} />
+                                {ing}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
