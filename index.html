@@ -9352,34 +9352,10 @@ function PlatsDuJourPrint({ monthDays, platsDuJour, recipes, articles, monthLabe
                   {plats.map((plat) => {
                     const r = plat.recipeId ? recipes.find((x) => x.id === plat.recipeId) : null;
                     const name = r ? r.name : plat.name;
-                    // Liste d'ingrédients à afficher : recette liée → noms ; plat libre → articles dosés
-                    let ings = [];
-                    if (r) {
-                      ings = (r.articles || []).map((l) => {
-                        const a = articles.find((x) => x.id === l.id);
-                        return a ? a.name : null;
-                      }).filter(Boolean);
-                    } else if (plat.articles && plat.articles.length) {
-                      ings = plat.articles.map((l) => {
-                        const a = articles.find((x) => x.id === l.id);
-                        return a ? `${a.name} — ${l.qty} ${a.unit}` : null;
-                      }).filter(Boolean);
-                    } else if (plat.ingredients) {
-                      ings = plat.ingredients;
-                    }
+                    // L'impression ne montre que le nom des plats, sans détail d'ingrédients.
                     return (
-                      <div key={plat.id} style={{ marginBottom: 10 }}>
-                        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{name}</div>
-                        {ings.length > 0 && (
-                          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                            {ings.map((ing, i) => (
-                              <li key={i} style={{ fontSize: 12, color: palette.inkSoft, padding: '2px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ width: 4, height: 4, borderRadius: '50%', background: palette.amber, flexShrink: 0 }} />
-                                {ing}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
+                      <div key={plat.id} style={{ marginBottom: 8 }}>
+                        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600 }}>{name}</div>
                       </div>
                     );
                   })}
