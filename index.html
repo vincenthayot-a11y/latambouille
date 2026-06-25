@@ -186,6 +186,7 @@ const STORAGE_KEYS = {
   assetMaintenance: 'mc5:assetMaintenance',        // contrats d'entretien (récurrents)
   assetInterventions: 'mc5:assetInterventions',    // pannes & réparations ponctuelles
   platsDuJour: 'mc5:platsDuJour',                   // planning des plats du jour par date
+  platsDuJourDays: 'mc5:platsDuJourDays',           // jours de la semaine affichés (préférence)
   initialized: 'mc5:initialized',
   aiModel: 'mc5:aiModel',
   scanPrompt: 'mc5:scanPrompt',
@@ -9021,8 +9022,23 @@ function PlatsDuJourView({ context }) {
   const now = new Date();
   const [curYear, setCurYear] = useState(now.getFullYear());
   const [curMonth, setCurMonth] = useState(now.getMonth());
-  // Jours actifs (0=dim … 6=sam). Défaut : tous les jours.
+  // Jours actifs (0=dim … 6=sam). Persisté entre sessions via storage.
   const [activeDays, setActiveDays] = useState([0, 1, 2, 3, 4, 5, 6]);
+  const [daysLoaded, setDaysLoaded] = useState(false);
+  // Charge la préférence au montage
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const saved = await storageGet(STORAGE_KEYS.platsDuJourDays, null);
+      if (alive && Array.isArray(saved) && saved.length > 0) setActiveDays(saved);
+      if (alive) setDaysLoaded(true);
+    })();
+    return () => { alive = false; };
+  }, []);
+  // Sauve à chaque changement (après le chargement initial, pour ne pas écraser)
+  useEffect(() => {
+    if (daysLoaded) storageSet(STORAGE_KEYS.platsDuJourDays, activeDays);
+  }, [activeDays, daysLoaded]);
   const [pickerFor, setPickerFor] = useState(null); // clé "dateKey:platId" pour lequel le picker est ouvert
   const [ingredientPickerFor, setIngredientPickerFor] = useState(null); // { key, platId } pour l'éditeur d'ingrédients
   const [showPrint, setShowPrint] = useState(false);
