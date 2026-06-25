@@ -3281,6 +3281,7 @@ const DRIVE_FILES = {
   assets: 'assets.json',                // gros équipement
   assetMaintenance: 'asset-maintenance.json',
   assetInterventions: 'asset-interventions.json',
+  platsDuJour: 'plats-du-jour.json',
   alertSettings: 'alert-settings.json',
   purchasesForYear: (year) => 'purchases-' + year + '.json',
   salesForYear: (year) => 'sales-' + year + '.json',
@@ -3295,7 +3296,7 @@ const DRIVE_FILES = {
  */
 function splitDataIntoFiles({ articles, recipes, menus, purchases, sales, inventories, energy,
   equipment, equipmentPurchases, equipmentInventories,
-  assets, assetMaintenance, assetInterventions, alertSettings } = {}) {
+  assets, assetMaintenance, assetInterventions, platsDuJour, alertSettings } = {}) {
   const result = {
     [DRIVE_FILES.articles]: Array.isArray(articles) ? articles : [],
     [DRIVE_FILES.recipes]: Array.isArray(recipes) ? recipes : [],
@@ -3308,6 +3309,8 @@ function splitDataIntoFiles({ articles, recipes, menus, purchases, sales, invent
     [DRIVE_FILES.assets]: Array.isArray(assets) ? assets : [],
     [DRIVE_FILES.assetMaintenance]: Array.isArray(assetMaintenance) ? assetMaintenance : [],
     [DRIVE_FILES.assetInterventions]: Array.isArray(assetInterventions) ? assetInterventions : [],
+    // platsDuJour est un objet { 'YYYY-MM-DD': [...] }, pas un tableau
+    [DRIVE_FILES.platsDuJour]: (platsDuJour && typeof platsDuJour === 'object' && !Array.isArray(platsDuJour)) ? platsDuJour : {},
     [DRIVE_FILES.alertSettings]: alertSettings || {},
   };
 
@@ -3352,6 +3355,7 @@ function parseFilename(filename) {
   if (filename === DRIVE_FILES.assets) return { kind: 'assets' };
   if (filename === DRIVE_FILES.assetMaintenance) return { kind: 'assetMaintenance' };
   if (filename === DRIVE_FILES.assetInterventions) return { kind: 'assetInterventions' };
+  if (filename === DRIVE_FILES.platsDuJour) return { kind: 'platsDuJour' };
   if (filename === DRIVE_FILES.alertSettings) return { kind: 'alertSettings' };
 
   const purchasesMatch = filename.match(/^purchases-(\d{4})\.json$/);
@@ -3467,7 +3471,7 @@ async function driveReadAll(endpoint, token) {
   const files = await driveListFiles(endpoint, token);
   if (files.length === 0) return null;
 
-  const result = { articles: [], recipes: [], menus: [], purchases: [], sales: [], inventories: [], energy: [], equipment: [], equipmentPurchases: [], equipmentInventories: [], assets: [], assetMaintenance: [], assetInterventions: [], alertSettings: null };
+  const result = { articles: [], recipes: [], menus: [], purchases: [], sales: [], inventories: [], energy: [], equipment: [], equipmentPurchases: [], equipmentInventories: [], assets: [], assetMaintenance: [], assetInterventions: [], platsDuJour: {}, alertSettings: null };
   let foundAny = false;
 
   // Read each file individually
@@ -3483,7 +3487,8 @@ async function driveReadAll(endpoint, token) {
     const isArray = Array.isArray(file.content);
     const isObject = file.content && typeof file.content === 'object' && !isArray;
     const isAlertSettings = parsed.kind === 'alertSettings';
-    if (!isArray && !(isAlertSettings && isObject)) {
+    const isPlatsDuJour = parsed.kind === 'platsDuJour';
+    if (!isArray && !((isAlertSettings || isPlatsDuJour) && isObject)) {
       console.warn('[Drive] Skipping unexpected file content', meta.name, typeof file.content);
       continue;
     }
@@ -3512,6 +3517,8 @@ async function driveReadAll(endpoint, token) {
       result.assetMaintenance = file.content;
     } else if (parsed.kind === 'assetInterventions') {
       result.assetInterventions = file.content;
+    } else if (parsed.kind === 'platsDuJour') {
+      result.platsDuJour = file.content; // object { date: [...] }, not array
     } else if (parsed.kind === 'alertSettings') {
       result.alertSettings = file.content; // object, not array
     } else if (parsed.kind === 'purchases') {
@@ -6369,11 +6376,12 @@ export default function LaTambouille() {
     if (Array.isArray(envelope.assets))               setAssets(envelope.assets);
     if (Array.isArray(envelope.assetMaintenance))     setAssetMaintenance(envelope.assetMaintenance);
     if (Array.isArray(envelope.assetInterventions))   setAssetInterventions(envelope.assetInterventions);
+    if (envelope.platsDuJour && typeof envelope.platsDuJour === 'object' && !Array.isArray(envelope.platsDuJour)) setPlatsDuJour(envelope.platsDuJour);
     if (envelope.alertSettings && typeof envelope.alertSettings === 'object') setAlertSettings(mergeAlertSettings(envelope.alertSettings));
   }, []);
 
   const driveSync = useDriveSync({
-    data: { articles, recipes, menus, purchases, sales, inventories, energy, equipment, equipmentPurchases, equipmentInventories, assets, assetMaintenance, assetInterventions, alertSettings },
+    data: { articles, recipes, menus, purchases, sales, inventories, energy, equipment, equipmentPurchases, equipmentInventories, assets, assetMaintenance, assetInterventions, platsDuJour, alertSettings },
     applyRemoteData,
   });
 
@@ -18773,14 +18781,14 @@ function downloadJSON(data, filename) {
 function exportFullBackup(context) {
   const { articles, recipes, menus, purchases, sales, inventories, energy,
           equipment, equipmentPurchases, equipmentInventories,
-          assets, assetMaintenance, assetInterventions, alertSettings } = context;
+          assets, assetMaintenance, assetInterventions, platsDuJour, alertSettings } = context;
   const today = new Date().toISOString().slice(0, 10);
   const backup = {
     exportDate: today,
     appVersion: '5',
     articles, recipes, menus, purchases, sales, inventories, energy,
     equipment, equipmentPurchases, equipmentInventories,
-    assets, assetMaintenance, assetInterventions, alertSettings,
+    assets, assetMaintenance, assetInterventions, platsDuJour, alertSettings,
   };
   downloadJSON(backup, `latambouille-backup-${today}.json`);
   mcToast.success('Sauvegarde téléchargée');
