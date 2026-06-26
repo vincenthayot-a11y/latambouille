@@ -9055,7 +9055,7 @@ function FreePlatIngredientEditor({ articles, priceIndex, current, onSave, onClo
 }
 
 function PlatsDuJourView({ context }) {
-  const { platsDuJour, setPlatsDuJour, recipes, setRecipes, articles, priceIndex } = context;
+  const { platsDuJour, setPlatsDuJour, recipes, setRecipes, articles, priceIndex, menus } = context;
   const isMobile = useIsMobile(720);
 
   const now = new Date();
@@ -9352,6 +9352,7 @@ function PlatsDuJourView({ context }) {
           platsDuJour={platsDuJour}
           recipes={recipes}
           articles={articles}
+          menus={menus}
           monthLabel={`${PDJ_MOIS[curMonth]} ${curYear}`}
           onClose={() => setShowPrint(false)}
         />
@@ -9361,7 +9362,7 @@ function PlatsDuJourView({ context }) {
 }
 
 // Vue d'impression des plats du jour (réutilise la zone d'impression .mc-print-zone)
-function PlatsDuJourPrint({ monthDays, platsDuJour, recipes, articles, monthLabel, onClose }) {
+function PlatsDuJourPrint({ monthDays, platsDuJour, recipes, articles, menus, monthLabel, onClose }) {
   return createPortal(
     <div className="mc-overlay mc-print-portal" onClick={onClose}>
       <div className="mc-modal" style={{ maxWidth: 900, maxHeight: '90vh', overflow: 'auto', padding: 0 }} onClick={(e) => e.stopPropagation()}>
@@ -9391,10 +9392,32 @@ function PlatsDuJourPrint({ monthDays, platsDuJour, recipes, articles, monthLabe
                   {plats.map((plat) => {
                     const r = plat.recipeId ? recipes.find((x) => x.id === plat.recipeId) : null;
                     const name = r ? r.name : plat.name;
-                    // L'impression ne montre que le nom des plats, sans détail d'ingrédients.
+                    // Prix du plat = prix de vente de la recette liée.
+                    const platPrice = r && r.salePrice > 0 ? r.salePrice : null;
+                    // Prix du/des menu(s) qui utilisent cette recette comme plat principal.
+                    const linkedMenus = (r && Array.isArray(menus))
+                      ? menus.filter((m) => m.platId === r.id && m.price > 0)
+                      : [];
                     return (
-                      <div key={plat.id} style={{ marginBottom: 8 }}>
-                        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600 }}>{name}</div>
+                      <div key={plat.id} style={{ marginBottom: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                          <span style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600 }}>{name}</span>
+                          {platPrice !== null && (
+                            <span style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 700, color: palette.wine, whiteSpace: 'nowrap' }}>
+                              {formatEuro(platPrice)}
+                            </span>
+                          )}
+                        </div>
+                        {linkedMenus.length > 0 && (
+                          <div style={{ marginTop: 3 }}>
+                            {linkedMenus.map((m) => (
+                              <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: palette.inkSoft }}>
+                                <span>{m.name ? `Menu « ${m.name} »` : 'En menu'}</span>
+                                <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{formatEuro(m.price)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -10431,6 +10454,22 @@ function RecipesView({ context }) {
 function MenusView({ context }) {
   const { menus, setMenus, recipes, priceIndex } = context;
   const [editingMenu, setEditingMenu] = useState(null);
+  const [search, setSearch] = useState('');
+  const isMobile = useIsMobile(720);
+
+  // Filtre : nom du menu, nom du plat, des entrées et des desserts
+  const filteredMenus = useMemo(() => {
+    const q = normalizeText(search);
+    if (!q) return menus;
+    return menus.filter((menu) => {
+      const parts = [menu.name || ''];
+      const plat = recipes.find((r) => r.id === menu.platId);
+      if (plat) parts.push(plat.name);
+      for (const id of (menu.entrees || [])) { const r = recipes.find((x) => x.id === id); if (r) parts.push(r.name); }
+      for (const id of (menu.desserts || [])) { const r = recipes.find((x) => x.id === id); if (r) parts.push(r.name); }
+      return normalizeText(parts.join(' ')).includes(q);
+    });
+  }, [menus, recipes, search]);
 
   // Coût d'une recette dans le contexte d'un menu.
   // On passe par indexedPlateCost (et NON indexedRecipeCost) pour que les plats
@@ -10499,6 +10538,23 @@ function MenusView({ context }) {
         </button>
       </div>
 
+      {/* Barre de recherche (visible dès qu'il y a des menus) */}
+      {menus.length > 0 && (
+        <div style={{ position: 'relative', maxWidth: 420 }}>
+          <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft, pointerEvents: 'none' }} />
+          <input
+            className="mc-input"
+            placeholder="Rechercher un menu, un plat, une entrée…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ paddingLeft: 36, fontSize: 13 }}
+          />
+          {search && (
+            <button onClick={() => setSearch('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: palette.inkSoft, fontSize: 14 }}>✕</button>
+          )}
+        </div>
+      )}
+
       {recipes.length === 0 && (
         <EmptyState
           icon={FileText}
@@ -10514,7 +10570,15 @@ function MenusView({ context }) {
         />
       )}
 
-      {menus.map((menu) => {
+      {menus.length > 0 && filteredMenus.length === 0 && (
+        <EmptyState
+          icon={Search}
+          title="Aucun menu trouvé"
+          description={`Aucun menu ne correspond à « ${search} ».`}
+        />
+      )}
+
+      {filteredMenus.map((menu) => {
         const costs = menuCosts(menu);
         const plat = recipes.find((r) => r.id === menu.platId);
         const entreeNames = (menu.entrees || []).map((id) => recipes.find((r) => r.id === id)?.name).filter(Boolean);
@@ -10556,26 +10620,26 @@ function MenusView({ context }) {
               </div>
             </div>
             {/* 3 services */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1px 1fr 1px 1fr' }}>
-              <div style={{ padding: '14px 20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1px 1fr 1px 1fr' }}>
+              <div style={{ padding: '14px 20px', borderBottom: isMobile ? `1px solid ${palette.rule}` : 'none' }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Entrée{entreeNames.length > 1 ? 's au choix' : ''}</div>
                 {entreeNames.length === 0 ? <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic' }}>Non incluse</div>
-                  : entreeNames.map((name, i) => { const c = recipeCost((menu.entrees||[])[i]); return <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}><span>· {name}</span><span style={{ color: palette.inkSoft, fontFamily: 'Fraunces, serif' }}>{c !== null ? formatEuro(c) : '—'}</span></div>; })}
+                  : entreeNames.map((name, i) => { const c = recipeCost((menu.entrees||[])[i]); return <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4, gap: 8 }}><span>· {name}</span><span style={{ color: palette.inkSoft, fontFamily: 'Fraunces, serif', whiteSpace: 'nowrap' }}>{c !== null ? formatEuro(c) : '—'}</span></div>; })}
               </div>
-              <div style={{ background: palette.rule }} />
-              <div style={{ padding: '14px 20px', background: palette.paper }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Plat (unique)</div>
+              {!isMobile && <div style={{ background: palette.rule }} />}
+              <div style={{ padding: '14px 20px', background: palette.paper, borderBottom: isMobile ? `1px solid ${palette.rule}` : 'none' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: palette.wine, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Plat (unique)</div>
                 {!plat ? <div style={{ fontSize: 12, color: palette.wine }}>Non défini</div>
                   : <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600 }}><span>{plat.name}</span><span style={{ fontFamily: 'Fraunces, serif' }}>{costs ? formatEuro(costs.platCost) : '—'}</span></div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600, gap: 8 }}><span>{plat.name}</span><span style={{ fontFamily: 'Fraunces, serif', whiteSpace: 'nowrap' }}>{costs ? formatEuro(costs.platCost) : '—'}</span></div>
                       {plat.includesAssortment && <div style={{ fontSize: 10, color: palette.sage, marginTop: 2 }}>+ assortiment d'assiette inclus</div>}
                     </div>}
               </div>
-              <div style={{ background: palette.rule }} />
+              {!isMobile && <div style={{ background: palette.rule }} />}
               <div style={{ padding: '14px 20px' }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Dessert{dessertNames.length > 1 ? 's au choix' : ''}</div>
                 {dessertNames.length === 0 ? <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic' }}>Non inclus</div>
-                  : dessertNames.map((name, i) => { const c = recipeCost((menu.desserts||[])[i]); return <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}><span>· {name}</span><span style={{ color: palette.inkSoft, fontFamily: 'Fraunces, serif' }}>{c !== null ? formatEuro(c) : '—'}</span></div>; })}
+                  : dessertNames.map((name, i) => { const c = recipeCost((menu.desserts||[])[i]); return <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4, gap: 8 }}><span>· {name}</span><span style={{ color: palette.inkSoft, fontFamily: 'Fraunces, serif', whiteSpace: 'nowrap' }}>{c !== null ? formatEuro(c) : '—'}</span></div>; })}
               </div>
             </div>
             {menu.notes && <div style={{ padding: '10px 20px', borderTop: `1px solid ${palette.rule}`, fontSize: 12, color: palette.inkSoft, fontStyle: 'italic' }}>{menu.notes}</div>}
