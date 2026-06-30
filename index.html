@@ -9374,57 +9374,75 @@ function PlatsDuJourPrint({ monthDays, platsDuJour, recipes, articles, menus, mo
           </div>
         </div>
         <div className="mc-print-zone" style={{ padding: 24 }}>
-          <div className="mc-print-header" style={{ marginBottom: 16 }}>
-            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 22, fontWeight: 700, color: palette.wine }}>Le Point de Vue</div>
-            <div style={{ fontSize: 14, color: palette.inkSoft }}>Plats du jour — {monthLabel}</div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
-            {monthDays.map((d) => {
-              const key = pdjDateKey(d);
-              const plats = platsDuJour[key] || [];
-              if (plats.length === 0) return null;
-              return (
-                <div key={key} className="mc-card" style={{ padding: 14, breakInside: 'avoid' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${palette.rule}` }}>
-                    <span className="mc-display" style={{ fontSize: 20, fontWeight: 700 }}>{d.getDate()}</span>
-                    <span style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5, color: palette.inkSoft }}>{PDJ_JOURS[d.getDay()]}</span>
-                  </div>
-                  {plats.map((plat) => {
-                    const r = plat.recipeId ? recipes.find((x) => x.id === plat.recipeId) : null;
-                    const name = r ? r.name : plat.name;
-                    // Prix du plat = prix de vente de la recette liée.
-                    const platPrice = r && r.salePrice > 0 ? r.salePrice : null;
-                    // Prix du/des menu(s) qui utilisent cette recette comme plat principal.
-                    const linkedMenus = (r && Array.isArray(menus))
-                      ? menus.filter((m) => m.platId === r.id && m.price > 0)
-                      : [];
+          {(() => {
+            // Jours avec contenu uniquement
+            const daysWithContent = monthDays.filter((d) => (platsDuJour[pdjDateKey(d)] || []).length > 0);
+            // Nombre total de plats à afficher (pour adapter la taille au volume)
+            const totalPlats = daysWithContent.reduce((n, d) => n + (platsDuJour[pdjDateKey(d)] || []).length, 0);
+            // Échelle adaptative pour tenir sur une page : plus il y a de plats, plus on réduit
+            const scale = totalPlats <= 8 ? 1 : totalPlats <= 14 ? 0.82 : totalPlats <= 22 ? 0.68 : 0.55;
+            const nameSize = Math.round(34 * scale);
+            const priceSize = Math.round(34 * scale);
+            const menuSize = Math.round(20 * scale);
+            const dateSize = Math.round(30 * scale);
+            const rowGap = Math.round(18 * scale);
+
+            return (
+              <>
+                <div className="mc-print-header" style={{ marginBottom: Math.round(18 * scale), textAlign: 'center' }}>
+                  <div style={{ fontFamily: 'Fraunces, serif', fontSize: Math.round(26 * scale), fontWeight: 700, color: palette.wine }}>Plats du jour</div>
+                  <div style={{ fontSize: Math.round(15 * scale), color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 1 }}>{monthLabel}</div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {daysWithContent.map((d, di) => {
+                    const key = pdjDateKey(d);
+                    const plats = platsDuJour[key] || [];
                     return (
-                      <div key={plat.id} style={{ marginBottom: 10 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                          <span style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600 }}>{name}</span>
-                          {platPrice !== null && (
-                            <span style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 700, color: palette.wine, whiteSpace: 'nowrap' }}>
-                              {formatEuro(platPrice)}
-                            </span>
-                          )}
+                      <div key={key} style={{
+                        display: 'flex', alignItems: 'flex-start', gap: Math.round(16 * scale),
+                        padding: `${rowGap}px 0`,
+                        borderTop: di === 0 ? 'none' : `1px solid ${palette.rule}`,
+                        breakInside: 'avoid',
+                      }}>
+                        {/* Date à gauche */}
+                        <div style={{ minWidth: Math.round(90 * scale), flexShrink: 0 }}>
+                          <div className="mc-display" style={{ fontSize: dateSize, fontWeight: 700, lineHeight: 1, color: palette.wine }}>{d.getDate()}</div>
+                          <div style={{ fontSize: Math.round(13 * scale), textTransform: 'uppercase', letterSpacing: 0.5, color: palette.inkSoft }}>{PDJ_JOURS[d.getDay()].slice(0, 3)}</div>
                         </div>
-                        {linkedMenus.length > 0 && (
-                          <div style={{ marginTop: 3 }}>
-                            {linkedMenus.map((m) => (
-                              <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: palette.inkSoft }}>
-                                <span>{m.name ? `Menu « ${m.name} »` : 'En menu'}</span>
-                                <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{formatEuro(m.price)}</span>
+
+                        {/* Plats à droite */}
+                        <div style={{ flex: 1 }}>
+                          {plats.map((plat, pi) => {
+                            const r = plat.recipeId ? recipes.find((x) => x.id === plat.recipeId) : null;
+                            const name = r ? r.name : plat.name;
+                            const platPrice = r && r.salePrice > 0 ? r.salePrice : null;
+                            const linkedMenus = (r && Array.isArray(menus)) ? menus.filter((m) => m.platId === r.id && m.price > 0) : [];
+                            return (
+                              <div key={plat.id} style={{ marginTop: pi === 0 ? 0 : Math.round(10 * scale) }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                                  <span style={{ fontFamily: 'Fraunces, serif', fontSize: nameSize, fontWeight: 700, lineHeight: 1.1 }}>{name}</span>
+                                  {platPrice !== null && (
+                                    <span style={{ fontFamily: 'Fraunces, serif', fontSize: priceSize, fontWeight: 700, color: palette.wine, whiteSpace: 'nowrap' }}>{formatEuro(platPrice)}</span>
+                                  )}
+                                </div>
+                                {linkedMenus.map((m) => (
+                                  <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: menuSize, color: palette.ink, marginTop: Math.round(2 * scale) }}>
+                                    <span>{m.name ? `Menu « ${m.name} »` : 'En menu'}</span>
+                                    <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{formatEuro(m.price)}</span>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
-                          </div>
-                        )}
+                            );
+                          })}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              );
-            })}
-          </div>
+              </>
+            );
+          })()}
         </div>
       </div>
     </div>,
