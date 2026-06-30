@@ -4403,9 +4403,21 @@ select.mc-input { cursor: pointer; }
     display: block !important; background: white !important; animation: none !important;
   }
   .mc-print-zone {
-    position: static !important; width: 100% !important; height: auto !important;
+    position: static !important; width: 100% !important;
     min-height: 0 !important; padding: 0 !important; margin: 0 !important; overflow: visible !important;
     background: white !important;
+  }
+  /* Plats du jour : occuper toute la hauteur de la page imprimée et répartir
+     les jours de haut en bas pour remplir la feuille. */
+  .mc-print-portal .mc-print-zone {
+    display: flex !important; flex-direction: column !important;
+    min-height: 96vh !important; height: auto !important;
+    padding: 16px 8px !important;
+  }
+  .mc-print-fill {
+    flex: 1 1 auto !important;
+    height: auto !important;
+    align-content: stretch !important;
   }
 
   /* Cas 2 — impression du Rapport (zone non portée, dans #root) : si une
@@ -9444,16 +9456,16 @@ function PlatsDuJourPrint({ monthDays, platsDuJour, recipes, articles, menus, mo
                 </div>
 
                 {twoCols ? (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 32 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div className="mc-print-fill" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 32 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                       {daysWithContent.slice(0, perCol).map((d, i) => renderDay(d, i))}
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                       {daysWithContent.slice(perCol).map((d, i) => renderDay(d, i))}
                     </div>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div className="mc-print-fill" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                     {daysWithContent.map((d, i) => renderDay(d, i))}
                   </div>
                 )}
