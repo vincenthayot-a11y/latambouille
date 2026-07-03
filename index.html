@@ -1857,6 +1857,7 @@ const ALERT_TYPES = {
   STOCK_EMPTY: 'stock_empty', // stock <= 0 according to the model
   PRICE_TREND: 'price_trend', // price drift > 15% over 30 days
   SUPPLIER_PRICE_GAP: 'supplier_price_gap', // same article costs notably more at one supplier vs another
+  SUPPLIER_OVERDUE: 'supplier_overdue', // regular supplier hasn't invoiced in noticeably longer than usual
   EQUIPMENT_LOW: 'equipment_low', // physical equipment stock below threshold (per last inventory)
 };
 
@@ -1879,6 +1880,13 @@ const SUPPLIER_GAP_THRESHOLD_PCT_DEFAULT = 20; // user-adjustable in settings
 // ajouté à un seul endroit (à la fois le défaut et le merge sont géré).
 const DEFAULT_ALERT_SETTINGS = {
   supplierGapThresholdPct: SUPPLIER_GAP_THRESHOLD_PCT_DEFAULT,
+  // Surveillance des fournisseurs réguliers qui n'ont pas facturé depuis un
+  // délai anormalement long par rapport à leur rythme habituel.
+  // watchedSuppliers: liste de noms de fournisseurs à surveiller (choisis par
+  // l'utilisateur). Si null → non encore configuré (aucune alerte tant que
+  // l'utilisateur n'a pas choisi). Sensibilité = multiplicateur du rythme moyen.
+  watchedSuppliers: [],
+  supplierOverdueSensitivity: 2, // alerte si délai actuel > 2× l'intervalle moyen
 };
 
 /**
@@ -1967,6 +1975,81 @@ function detectSupplierPriceGaps(articles, purchases, today, thresholdPct, windo
     });
   }
   return results;
+}
+
+/**
+ * Analyse le rythme de facturation de chaque fournisseur.
+ * Retourne, par fournisseur : nombre de factures, intervalle moyen entre
+ * factures (jours), date de dernière facture, et un score de "régularité"
+ * (plus il y a de factures rapprochées et régulières, plus il est candidat à
+ * la surveillance). Utilisé pour (a) proposer les fournisseurs fréquents et
+ * (b) détecter les retards.
+ */
+function analyzeSupplierCadence(purchases, today) {
+  const bySupplier = {};
+  for (const p of purchases) {
+    const name = (p.supplier || '').trim();
+    if (!name || !p.date) continue;
+    (bySupplier[name] = bySupplier[name] || []).push(p.date);
+  }
+  const result = {};
+  for (const [name, datesRaw] of Object.entries(bySupplier)) {
+    const dates = [...new Set(datesRaw)].sort(); // dates uniques triées
+    if (dates.length < 2) {
+      result[name] = { name, count: dates.length, avgIntervalDays: null, lastDate: dates[dates.length - 1] || null, daysSinceLast: null, spanDays: 0 };
+      continue;
+    }
+    // Intervalles entre factures consécutives
+    let totalGap = 0;
+    for (let i = 1; i < dates.length; i++) {
+      totalGap += daysBetween(dates[i - 1], dates[i]);
+    }
+    const avgIntervalDays = totalGap / (dates.length - 1);
+    const lastDate = dates[dates.length - 1];
+    const daysSinceLast = daysBetween(lastDate, today);
+    const spanDays = daysBetween(dates[0], dates[dates.length - 1]);
+    result[name] = { name, count: dates.length, avgIntervalDays, lastDate, daysSinceLast, spanDays };
+  }
+  return result;
+}
+
+/**
+ * Propose les fournisseurs "fréquents" : ceux avec assez de factures et un
+ * rythme régulier (intervalle moyen court). Sert de suggestion à cocher.
+ * Un fournisseur est suggéré s'il a ≥ 4 factures et un intervalle moyen ≤ 45j.
+ */
+function suggestFrequentSuppliers(cadence) {
+  return Object.values(cadence)
+    .filter((s) => s.count >= 4 && s.avgIntervalDays !== null && s.avgIntervalDays <= 45)
+    .sort((a, b) => a.avgIntervalDays - b.avgIntervalDays)
+    .map((s) => s.name);
+}
+
+/**
+ * Détecte les fournisseurs surveillés en retard : le délai depuis leur
+ * dernière facture dépasse `sensitivity` × leur intervalle moyen habituel.
+ * Ne renvoie que les fournisseurs explicitement surveillés par l'utilisateur.
+ */
+function detectOverdueSuppliers(cadence, watchedSuppliers, sensitivity, today) {
+  if (!Array.isArray(watchedSuppliers) || watchedSuppliers.length === 0) return [];
+  const mult = sensitivity > 0 ? sensitivity : 2;
+  const out = [];
+  for (const name of watchedSuppliers) {
+    const s = cadence[name];
+    if (!s || s.avgIntervalDays === null || !s.lastDate) continue;
+    const threshold = s.avgIntervalDays * mult;
+    if (s.daysSinceLast > threshold) {
+      out.push({
+        supplier: name,
+        avgIntervalDays: s.avgIntervalDays,
+        daysSinceLast: s.daysSinceLast,
+        lastDate: s.lastDate,
+        threshold,
+      });
+    }
+  }
+  // Les plus en retard d'abord
+  return out.sort((a, b) => (b.daysSinceLast / b.avgIntervalDays) - (a.daysSinceLast / a.avgIntervalDays));
 }
 
 function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, inventories, today, supplierGapThresholdPct, equipment, equipmentInventories }) {
@@ -15899,6 +15982,21 @@ function AlertsView({ context }) {
   const priceAlerts = filteredAlerts.filter((a) => a.type === ALERT_TYPES.PRICE_TREND);
   const supplierGapAlerts = filteredAlerts.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP);
 
+  // ─── Fournisseurs réguliers en retard ────────────────────────────────────
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const supplierCadence = useMemo(() => analyzeSupplierCadence(purchases || [], todayStr), [purchases, todayStr]);
+  const suggestedSuppliers = useMemo(() => suggestFrequentSuppliers(supplierCadence), [supplierCadence]);
+  const watchedSuppliers = alertSettings.watchedSuppliers || [];
+  const overdueSuppliers = useMemo(
+    () => detectOverdueSuppliers(supplierCadence, watchedSuppliers, alertSettings.supplierOverdueSensitivity || 2, todayStr),
+    [supplierCadence, watchedSuppliers, alertSettings.supplierOverdueSensitivity, todayStr]
+  );
+  const toggleWatchedSupplier = (name) => {
+    const cur = alertSettings.watchedSuppliers || [];
+    const next = cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name];
+    setAlertSettings((s) => ({ ...s, watchedSuppliers: next }));
+  };
+
   const handleThresholdSave = (articleId, newThreshold) => {
     setArticles(articles.map((i) =>
       i.id === articleId
@@ -16022,6 +16120,64 @@ function AlertsView({ context }) {
             Une alerte se déclenche quand un article acheté chez ≥ 2 fournisseurs présente
             un écart de prix supérieur au seuil sur les 90 derniers jours.
           </div>
+
+          {/* Surveillance des fournisseurs réguliers */}
+          <div style={{ borderTop: `1px solid ${palette.rule}`, marginTop: 20, paddingTop: 20 }}>
+            <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 6px' }}>
+              Fournisseurs réguliers à surveiller
+            </h3>
+            <div style={{ fontSize: 12, color: palette.inkSoft, marginBottom: 16, lineHeight: 1.5 }}>
+              Cochez les fournisseurs dont vous voulez être alerté s'ils n'ont pas facturé depuis
+              anormalement longtemps par rapport à leur rythme habituel. L'app suggère ci-dessous
+              ceux qui reviennent souvent, mais vous gardez le contrôle total.
+            </div>
+
+            {/* Sensibilité */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+              <label style={{ fontSize: 13, color: palette.ink }}>Sensibilité de l'alerte :</label>
+              <input type="range" min="1.5" max="4" step="0.5"
+                value={alertSettings.supplierOverdueSensitivity || 2}
+                onChange={(e) => setAlertSettings((s) => ({ ...s, supplierOverdueSensitivity: parseFloat(e.target.value) }))}
+                style={{ accentColor: palette.wine }} />
+              <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'Fraunces, serif', minWidth: 90, textAlign: 'right' }}>
+                {alertSettings.supplierOverdueSensitivity || 2}× le rythme
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: palette.inkSoft, marginBottom: 16, lineHeight: 1.4 }}>
+              Ex : un fournisseur qui facture en moyenne tous les 7 jours déclenche une alerte
+              après {Math.round(7 * (alertSettings.supplierOverdueSensitivity || 2))} jours sans facture.
+            </div>
+
+            {/* Liste des fournisseurs suggérés + surveillés */}
+            {(() => {
+              // Union : suggérés + déjà surveillés (même si non suggérés)
+              const allNames = [...new Set([...(suggestedSuppliers || []), ...watchedSuppliers])].sort();
+              if (allNames.length === 0) {
+                return <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic' }}>Pas encore assez de factures pour identifier des fournisseurs réguliers.</div>;
+              }
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {allNames.map((name) => {
+                    const on = watchedSuppliers.includes(name);
+                    const s = supplierCadence[name];
+                    const suggested = (suggestedSuppliers || []).includes(name);
+                    return (
+                      <label key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '8px 12px', borderRadius: 8, border: `1px solid ${on ? palette.wine + '40' : palette.rule}`, background: on ? palette.wine + '08' : 'transparent' }}>
+                        <input type="checkbox" checked={on} onChange={() => toggleWatchedSupplier(name)} style={{ accentColor: palette.wine, width: 16, height: 16 }} />
+                        <span style={{ flex: 1, fontSize: 13, fontWeight: on ? 600 : 400, color: palette.ink }}>{name}</span>
+                        {s && s.avgIntervalDays !== null && (
+                          <span style={{ fontSize: 11, color: palette.inkSoft }}>
+                            ~{Math.round(s.avgIntervalDays)} j entre factures · {s.count} factures
+                          </span>
+                        )}
+                        {suggested && !on && <span style={{ fontSize: 10, color: palette.sage, background: palette.sage + '18', padding: '2px 6px', borderRadius: 8 }}>suggéré</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 
@@ -16048,7 +16204,7 @@ function AlertsView({ context }) {
         </div>
       )}
 
-      {alertsIndex.length === 0 && (
+      {alertsIndex.length === 0 && overdueSuppliers.length === 0 && (
         <div className="mc-card" style={{ padding: 32, textAlign: 'center' }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>✓</div>
           <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 8px', color: palette.sage }}>
@@ -16108,6 +16264,37 @@ function AlertsView({ context }) {
                 onDisableAlert={() => handleDisableAlert(alert.article.id, 'price')}
               />
             ))}
+          </div>
+        </section>
+      )}
+
+      {/* ─── Fournisseurs réguliers en retard ──────────────────────────── */}
+      {overdueSuppliers.length > 0 && (
+        <section style={{ marginBottom: 32 }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 12px' }}>
+            Fournisseurs sans facture récente ({overdueSuppliers.length})
+          </h3>
+          <div className="mc-card" style={{ overflow: 'hidden' }}>
+            {overdueSuppliers.map((o) => (
+              <div key={o.supplier} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: `1px solid ${palette.rule}` }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: palette.amber, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: palette.ink }}>{o.supplier}</div>
+                  <div style={{ fontSize: 12, color: palette.inkSoft }}>
+                    Dernière facture il y a <strong>{o.daysSinceLast} jours</strong> ({formatShortDate(o.lastDate, { withYear: true })})
+                    {' · '}rythme habituel : ~{Math.round(o.avgIntervalDays)} j
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: palette.amber, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {Math.round(o.daysSinceLast / o.avgIntervalDays)}× le délai habituel
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 8, lineHeight: 1.5 }}>
+            Ces fournisseurs surveillés n'ont pas facturé depuis nettement plus longtemps que d'habitude.
+            Vérifiez si une facture est en attente de saisie, ou si une commande a été oubliée.
+            Ajustez la liste et la sensibilité via ⚙ Paramètres.
           </div>
         </section>
       )}
