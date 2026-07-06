@@ -3472,23 +3472,51 @@ function diffFiles(prevSplit, nextSplit) {
  * Reads a single file from the Apps Script Web App.
  * Returns { exists: boolean, content: any, modifiedAt: string|null }
  */
+/**
+ * Réessaie une opération réseau plusieurs fois avant d'abandonner, avec une
+ * courte pause croissante entre chaque tentative. Absorbe les micro-coupures
+ * de connexion (fréquentes sur wifi/4G de restaurant) : au lieu d'échouer au
+ * premier hoquet, on laisse le temps à la connexion de revenir.
+ *
+ * attempts = nombre total d'essais (3 → 1 essai + 2 réessais).
+ * baseDelayMs = pause avant le 1er réessai, doublée à chaque fois (500 → 1000).
+ */
+async function withRetry(fn, { attempts = 3, baseDelayMs = 600, label = '' } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) {
+        const delay = baseDelayMs * Math.pow(2, i); // 600, 1200, 2400…
+        console.warn(`[Drive] Échec ${label} (essai ${i + 1}/${attempts}), nouvel essai dans ${delay}ms`, err?.message || err);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function driveReadFile(endpoint, token, filename) {
   console.log('[Drive] Reading', filename);
   const url = endpoint + '?token=' + encodeURIComponent(token) +
               '&action=read&file=' + encodeURIComponent(filename);
 
-  const response = await fetch(url, { method: 'GET' });
+  return withRetry(async () => {
+    const response = await fetch(url, { method: 'GET' });
 
-  if (!response.ok) {
-    throw new Error('HTTP ' + response.status + ' lors de la lecture de ' + filename);
-  }
+    if (!response.ok) {
+      throw new Error('HTTP ' + response.status + ' lors de la lecture de ' + filename);
+    }
 
-  const data = await response.json();
-  if (!data.ok) {
-    throw new Error('Apps Script: ' + (data.error || 'erreur inconnue'));
-  }
+    const data = await response.json();
+    if (!data.ok) {
+      throw new Error('Apps Script: ' + (data.error || 'erreur inconnue'));
+    }
 
-  return data.file;
+    return data.file;
+  }, { label: 'lecture ' + filename });
 }
 
 /**
@@ -3499,29 +3527,31 @@ async function driveWriteFile(endpoint, token, filename, content) {
   const serialized = JSON.stringify(content ?? []);
   console.log('[Drive] Writing', filename, serialized.length, 'bytes');
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    // Apps Script Web Apps require text/plain to avoid CORS preflight rejection.
-    // The body is still JSON, but we declare it as plain text.
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      token,
-      action: 'write',
-      file: filename,
-      content,
-    }),
-  });
+  return withRetry(async () => {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      // Apps Script Web Apps require text/plain to avoid CORS preflight rejection.
+      // The body is still JSON, but we declare it as plain text.
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        token,
+        action: 'write',
+        file: filename,
+        content,
+      }),
+    });
 
-  if (!response.ok) {
-    throw new Error('HTTP ' + response.status + ' lors de l\'écriture de ' + filename);
-  }
+    if (!response.ok) {
+      throw new Error('HTTP ' + response.status + ' lors de l\'écriture de ' + filename);
+    }
 
-  const data = await response.json();
-  if (!data.ok) {
-    throw new Error('Apps Script: ' + (data.error || 'erreur inconnue'));
-  }
+    const data = await response.json();
+    if (!data.ok) {
+      throw new Error('Apps Script: ' + (data.error || 'erreur inconnue'));
+    }
 
-  return data.file;
+    return data.file;
+  }, { label: 'écriture ' + filename });
 }
 
 /**
