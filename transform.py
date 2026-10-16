@@ -254,6 +254,21 @@ s = re.sub(r"\n      \{ type: 'action', id: 'nav-simulator'[^\n]*", '', s, count
 s = re.sub(r"\{ type: 'action', id: 'nav-analytics'[^\n]*",
   "{ type: 'action', id: 'nav-savings',   label: 'Économies',           hint: 'Fournisseurs, références, prix', target: 'savings'    },", s, count=1)
 
+# ── I. Alertes : prix anormaux sur factures, hausses, stock ; badge cohérent ──
+rep("{activeTab === 'alerts' && <AlertsView context={context} />}", "{activeTab === 'alerts' && <PilotAlertsView context={context} />}")
+rep("""  // will activate once CLYO sales are imported.
+  const phase1Mode = sales.length === 0;
+""", """  // will activate once CLYO sales are imported.
+  const phase1Mode = sales.length === 0;
+  const pilotBadgeAlerts = useMemo(() => {
+    const g = pilotAlertGroups(purchases, articles, alertsIndex, alertSettings);
+    return [...g.anomalies, ...g.trends, ...g.stock];
+  }, [purchases, articles, alertsIndex, alertSettings]);
+""")
+rep("""          alertsIndex={alertsIndex}
+          collapsed={sidebarCollapsed}""", """          alertsIndex={pilotBadgeAlerts}
+          collapsed={sidebarCollapsed}""")
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 

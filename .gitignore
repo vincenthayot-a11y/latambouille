@@ -6,3 +6,4 @@ synctest.py
 pilotage_test.py
 shots_pilotage.py
 devserver.py
+alerttest.py

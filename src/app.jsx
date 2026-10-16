@@ -6594,6 +6594,10 @@ export default function LaTambouille() {
   // with an explanatory screen — so the user knows the features exist and
   // will activate once CLYO sales are imported.
   const phase1Mode = sales.length === 0;
+  const pilotBadgeAlerts = useMemo(() => {
+    const g = pilotAlertGroups(purchases, articles, alertsIndex, alertSettings);
+    return [...g.anomalies, ...g.trends, ...g.stock];
+  }, [purchases, articles, alertsIndex, alertSettings]);
 
   // ─── Food cost global (visible dans le header sur toutes les vues) ────────
   // Calcule le ratio coût matière / chiffre d'affaires sur la période active.
@@ -6712,7 +6716,7 @@ export default function LaTambouille() {
           tabs={tabs}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          alertsIndex={alertsIndex}
+          alertsIndex={pilotBadgeAlerts}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
           isMobile={isMobile}
@@ -6861,7 +6865,7 @@ export default function LaTambouille() {
           {activeTab === 'stocks' && <StocksView context={context} />}
           {activeTab === 'equipment' && <EquipmentView context={context} />}
           {activeTab === 'energy' && <EnergyView context={context} />}
-          {activeTab === 'alerts' && <AlertsView context={context} />}
+          {activeTab === 'alerts' && <PilotAlertsView context={context} />}
           {activeTab === 'report' && <PilotReportView context={context} />}
           {/* Sales stays accessible even in phase 1 — it's how the user activates phase 2 */}
           {activeTab === 'sales' && <SalesView context={context} />}
@@ -22602,6 +22606,168 @@ function PilotSavingsView({ context }) {
           );
         })()}
       </PilotSection>
+    </div>
+  );
+}
+
+// ─── ALERTES ───────────────────────────────────────────────────────────────
+// 1. Prix anormaux sur les factures récentes (erreur de facturation ou hausse)
+// 2. Prix qui montent (tendance sur 30 jours)
+// 3. Stock bas
+// Les écarts entre fournisseurs vivent dans « Économies ».
+
+const PILOT_ANOMALY_PCT = 12;
+
+function pilotInvoiceAnomalies(purchases, articles, checked = []) {
+  const today = new Date();
+  const since = new Date(today); since.setDate(since.getDate() - 45);
+  const sinceStr = pilotIsoDay(since);
+  const checkedSet = new Set(checked);
+  const out = [];
+  for (const p of purchases) {
+    if (!p.date || p.date < sinceStr) continue;
+    const refStart = new Date(p.date + 'T12:00:00'); refStart.setDate(refStart.getDate() - 120);
+    const refStartStr = pilotIsoDay(refStart);
+    (p.items || []).forEach((it, idx) => {
+      if (!it.articleId || !(it.pricePerMasterUnit > 0) || !(it.convertedQty > 0)) return;
+      const id = `${p.id}:${idx}`;
+      if (checkedSet.has(id)) return;
+      let v = 0, q = 0, n = 0;
+      for (const o of purchases) {
+        if (o === p || !o.date || o.date >= p.date || o.date < refStartStr) continue;
+        for (const x of (o.items || [])) {
+          if (x.articleId !== it.articleId || !(x.pricePerMasterUnit > 0) || !(x.convertedQty > 0)) continue;
+          v += x.pricePerMasterUnit * x.convertedQty; q += x.convertedQty; n += 1;
+        }
+      }
+      if (n < 2) return;
+      const ref = v / q;
+      const pct = ((it.pricePerMasterUnit - ref) / ref) * 100;
+      if (pct < PILOT_ANOMALY_PCT) return;
+      const article = articles.find((a) => a.id === it.articleId);
+      if (!article) return;
+      out.push({ id, purchase: p, item: it, article, ref, pct, extra: (it.pricePerMasterUnit - ref) * it.convertedQty });
+    });
+  }
+  return out.sort((a, b) => (b.purchase.date || '').localeCompare(a.purchase.date || '') || b.extra - a.extra);
+}
+
+function pilotAlertGroups(purchases, articles, alertsIndex, alertSettings) {
+  const anomalies = pilotInvoiceAnomalies(purchases, articles, alertSettings?.checkedAnomalies || []);
+  const trendIds = new Set(anomalies.map((a) => a.article.id));
+  const trends = alertsIndex.filter((a) => a.type === ALERT_TYPES.PRICE_TREND && !trendIds.has(a.article.id));
+  const stock = alertsIndex.filter((a) => a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY);
+  const gaps = alertsIndex.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP);
+  return { anomalies, trends, stock, gaps, count: anomalies.length + trends.length + stock.length };
+}
+
+function PilotAlertsView({ context }) {
+  const { purchases, articles, alertsIndex, alertSettings, setAlertSettings, setActiveTab } = context;
+  const isMobile = useIsMobile(720);
+  const [showAll, setShowAll] = useState(false);
+  const g = useMemo(() => pilotAlertGroups(purchases, articles, alertsIndex, alertSettings),
+    [purchases, articles, alertsIndex, alertSettings]);
+
+  const markOk = (id) => {
+    setAlertSettings((s) => ({ ...s, checkedAnomalies: [...(s.checkedAnomalies || []), id].slice(-500) }));
+    mcToast.success('Noté, cette ligne ne sera plus signalée');
+  };
+
+  const pill = (text, color) => (
+    <span className="mc-pill" style={{ background: color + '18', color, fontWeight: 600, whiteSpace: 'nowrap' }}>{text}</span>
+  );
+  const rowStyle = (i) => ({ display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 12, padding: '12px 0', borderTop: i ? `1px solid ${palette.rule}` : 'none', flexWrap: isMobile ? 'wrap' : 'nowrap' });
+
+  if (purchases.length === 0) {
+    return <EmptyState icon={AlertCircle} title="Aucune alerte pour l'instant" description="Dès vos premières factures, La Tambouille vous signale les prix anormaux et les hausses." />;
+  }
+
+  const anomalies = showAll ? g.anomalies : g.anomalies.slice(0, 8);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {g.count === 0 && (
+        <div className="mc-card" style={{ padding: '22px 24px', background: palette.sage + '12', borderColor: palette.sage + '40' }}>
+          <div className="mc-display" style={{ fontSize: 20, fontWeight: 600, color: palette.sage }}>Rien à signaler</div>
+          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>Aucun prix anormal sur vos factures des 45 derniers jours, aucune hausse marquée.</div>
+        </div>
+      )}
+
+      {g.anomalies.length > 0 && (
+        <PilotSection title={`À vérifier sur vos factures (${g.anomalies.length})`}
+          sub={`Lignes facturées au moins ${PILOT_ANOMALY_PCT} % plus cher que ce que vous payez d'habitude. Erreur du fournisseur ou vraie hausse : vérifiez avant de payer.`}>
+          {anomalies.map((a, i) => (
+            <div key={a.id} style={rowStyle(i)}>
+              <div style={{ flex: 1, minWidth: isMobile ? '100%' : 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{a.article.name}</span>
+                  {pill(`+${a.pct.toFixed(0)} %`, palette.wine)}
+                </div>
+                <div style={{ fontSize: 13, marginTop: 3 }}>
+                  Facturé <strong>{formatEuro(a.item.pricePerMasterUnit)}/{a.article.unit}</strong>
+                  <span style={{ color: palette.inkSoft }}> au lieu de {formatEuro(a.ref)} d'habitude</span>
+                </div>
+                <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 2 }}>
+                  {a.purchase.supplier || 'Fournisseur inconnu'}{a.purchase.invoiceNumber ? ` · facture ${a.purchase.invoiceNumber}` : ''} · {formatShortDate(a.purchase.date, { withYear: true })}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                <div className="mc-display" style={{ fontSize: 16, fontWeight: 700, color: palette.wine }}>+{formatEuro(a.extra)}</div>
+                <div style={{ fontSize: 11, color: palette.inkSoft }}>sur cette ligne</div>
+              </div>
+              <button className="mc-btn mc-btn-ghost" style={{ padding: '6px 10px', fontSize: 12 }} onClick={() => markOk(a.id)}>C'est normal</button>
+            </div>
+          ))}
+          {g.anomalies.length > 8 && (
+            <button className="mc-btn mc-btn-ghost" style={{ marginTop: 10 }} onClick={() => setShowAll((v) => !v)}>
+              {showAll ? 'Voir moins' : `Voir les ${g.anomalies.length - 8} autres`}
+            </button>
+          )}
+        </PilotSection>
+      )}
+
+      {g.trends.length > 0 && (
+        <PilotSection title={`Prix qui montent (${g.trends.length})`} sub="Prix moyen des 30 derniers jours, comparé aux 30 jours d'avant">
+          {g.trends.map((t, i) => (
+            <div key={t.article.id} style={rowStyle(i)}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{t.article.name}</div>
+                <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 2 }}>{formatEuro(t.priorAvg)} → {formatEuro(t.recentAvg)} / {t.article.unit}</div>
+              </div>
+              {pill(`+${t.deltaPct.toFixed(0)} %`, palette.amber)}
+            </div>
+          ))}
+        </PilotSection>
+      )}
+
+      {g.stock.length > 0 && (
+        <PilotSection title={`Stock bas (${g.stock.length})`} sub="Estimation à partir de vos achats et inventaires">
+          {g.stock.map((s, i) => (
+            <div key={s.article.id} style={rowStyle(i)}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{s.article.name}</div>
+                <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 2 }}>
+                  Reste environ {Math.max(0, s.currentStock || 0).toFixed(1).replace('.', ',')} {s.article.unit}
+                  {s.threshold != null && ` · seuil ${s.threshold.toFixed(1).replace('.', ',')} ${s.article.unit}`}
+                </div>
+              </div>
+              {pill(s.type === ALERT_TYPES.STOCK_EMPTY ? 'Épuisé' : 'À commander', s.type === ALERT_TYPES.STOCK_EMPTY ? palette.wine : palette.amber)}
+            </div>
+          ))}
+        </PilotSection>
+      )}
+
+      {g.gaps.length > 0 && (
+        <button className="mc-card" onClick={() => setActiveTab && setActiveTab('savings')} style={{
+          padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+          cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', color: palette.ink, background: '#fff', width: '100%',
+        }}>
+          <span style={{ fontSize: 14 }}>
+            <strong>{g.gaps.length} produit{g.gaps.length > 1 ? 's' : ''}</strong> moins cher{g.gaps.length > 1 ? 's' : ''} chez un autre de vos fournisseurs
+          </span>
+          <span style={{ fontSize: 13, color: palette.sage, fontWeight: 600, whiteSpace: 'nowrap' }}>Voir les économies →</span>
+        </button>
+      )}
     </div>
   );
 }
