@@ -1,6 +1,14 @@
-// Upstash Redis (REST) : variables créées par l'intégration Vercel → Storage → Upstash.
-const URL_ = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+// Upstash Redis (REST), branché par l'intégration Vercel → Storage → Upstash.
+// Les noms des variables dépendent du préfixe choisi : on cherche *_REST_API_URL / *_REST_API_TOKEN.
+function pick(suffix, exclude) {
+  const env = process.env;
+  const direct = env['KV' + suffix] || env['UPSTASH_REDIS' + suffix];
+  if (direct) return direct;
+  const key = Object.keys(env).find((k) => k.endsWith(suffix) && !(exclude && k.includes(exclude)));
+  return key ? env[key] : undefined;
+}
+const URL_ = pick('_REST_API_URL') || process.env.UPSTASH_REDIS_REST_URL;
+const TOKEN = pick('_REST_API_TOKEN', 'READ_ONLY') || process.env.UPSTASH_REDIS_REST_TOKEN;
 
 export function kvReady() { return !!(URL_ && TOKEN); }
 
