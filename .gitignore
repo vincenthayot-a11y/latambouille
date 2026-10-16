@@ -1,4 +1,8 @@
 node_modules
 shots
-*.py
 __pycache__
+flow.py
+synctest.py
+pilotage_test.py
+shots_pilotage.py
+devserver.py
