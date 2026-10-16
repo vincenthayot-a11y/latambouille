@@ -1,0 +1,34 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>La Tambouille</title><meta name="robots" content="noindex"><meta name="theme-color" content="#FBF8F3"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%237A1F2B%27/%3E%3Ctext x=%2716%27 y=%2723%27 font-size=%2720%27 text-anchor=%27middle%27 fill=%27%23FBF8F3%27 font-family=%27Georgia%27 font-weight=%27700%27%3ET%3C/text%3E%3C/svg%3E">
+<style>@font-face{font-family:"Fraunces";font-weight:400;src:url(fonts/fraunces-latin-400-normal.woff2) format("woff2")}
+@font-face{font-family:"Fraunces";font-weight:600;src:url(fonts/fraunces-latin-600-normal.woff2) format("woff2")}
+@font-face{font-family:"Fraunces";font-weight:700;src:url(fonts/fraunces-latin-700-normal.woff2) format("woff2")}
+@font-face{font-family:"DM Sans";font-weight:400;src:url(fonts/dm-sans-latin-400-normal.woff2) format("woff2")}
+@font-face{font-family:"DM Sans";font-weight:500;src:url(fonts/dm-sans-latin-500-normal.woff2) format("woff2")}
+@font-face{font-family:"DM Sans";font-weight:600;src:url(fonts/dm-sans-latin-600-normal.woff2) format("woff2")}
+@font-face{font-family:"DM Sans";font-weight:700;src:url(fonts/dm-sans-latin-700-normal.woff2) format("woff2")}
+</style><style>
+    html, body { margin: 0; padding: 0; }
+    body { background: #FBF8F3; }
+    #root { min-height: 100vh; }
+    .mc-bootstrap {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #FBF8F3; color: #7A1F2B;
+      font-family: Georgia, serif;
+    }
+    .mc-bootstrap-title { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
+    .mc-bootstrap-sub { font-size: 13px; color: #4A413A; font-family: system-ui, sans-serif; }
+    .mc-bootstrap-spinner {
+      margin-top: 24px; width: 32px; height: 32px;
+      border: 3px solid #E8DFD2; border-top-color: #7A1F2B; border-radius: 50%;
+      animation: mc-spin 0.9s linear infinite;
+    }
+    @keyframes mc-spin { to { transform: rotate(360deg); } }
+    .mc-bootstrap-error {
+      margin-top: 24px; padding: 16px; max-width: 480px;
+      background: #fff; border: 2px solid #7A1F2B; border-radius: 8px;
+      font-family: system-ui, sans-serif; font-size: 13px; color: #4A413A;
+      text-align: left; display: none;
+    }
+    .mc-bootstrap-error.visible { display: block; }
+  </style></head><body><div id="root"></div><script src="app.js"></script></body></html>

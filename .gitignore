@@ -1,0 +1,4 @@
+node_modules
+shots
+*.py
+__pycache__
