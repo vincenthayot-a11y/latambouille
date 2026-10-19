@@ -22135,6 +22135,7 @@ async function pilotApi(method, body, query = '') {
 async function pilotPull() {
   const r = await pilotApi('GET');
   if (r.status === 503) return 'nostorage';
+  if (r.status === 401) throw new PilotHardError('code');
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   if (j.data) {
@@ -22287,7 +22288,19 @@ function PilotRoot() {
     let alive = true;
     pilotPull()
       .then(() => { if (alive) setLoaded(true); })
-      .catch(() => { if (alive) setLoadError('Impossible de récupérer vos données en ligne. Vérifiez votre connexion internet.'); });
+      .catch((e) => {
+        if (!alive) return;
+        if (e instanceof PilotHardError && e.message === 'code') {
+          // Code retiré ou changé : on oublie le code et les données locales de
+          // l'ancien compte (elles restent en ligne), puis on redemande le code.
+          pilotApply({});
+          try { localStorage.removeItem(PILOT_KEYS.code); } catch (er) {}
+          setCode(''); setReady(false);
+          setError("Ce code d'accès n'est plus valide. Saisissez votre code.");
+          return;
+        }
+        setLoadError('Impossible de récupérer vos données en ligne. Vérifiez votre connexion internet.');
+      });
     const onVis = () => pilotCheckRemote();
     document.addEventListener('visibilitychange', onVis);
     const poll = setInterval(pilotCheckRemote, 60000);
