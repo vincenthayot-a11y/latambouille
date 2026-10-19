@@ -22414,7 +22414,7 @@ async function pilotScanOnce(model, sourceBlock, scanPrompt, extraHint = '') {
   const response = await fetch('/api/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-access-code': pilotGetCode() },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt + pilotSupplierHint() + extraHint }] }] }),
+    body: JSON.stringify({ model: window.__pilotForceModel || model, messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt + pilotSupplierHint() + extraHint }] }] }),
   });
   if (!response.ok) {
     const errText = await response.text();
@@ -22454,6 +22454,8 @@ function pilotCheckInvoice(inv) {
     const total = n(it.total_ht), qty = n(it.converted_qty), price = n(it.price_per_master_unit);
     // 2. Quantité × prix = montant de la ligne
     if (qty > 0 && price > 0 && Math.abs(qty * price - total) > Math.max(0.1, Math.abs(total) * 0.03)) pb.push(`ligne incohérente : ${label}`);
+    // Montant sans quantité : la quantité n'a pas été lue
+    if (total > 0 && !(qty > 0)) pb.push(`quantité manquante : ${label}`);
     // 3. Un volume ou un poids dans le libellé doit donner des L ou des kg
     const unit = String(it.master_unit || '').toLowerCase();
     // (« SL » = « 5L » mal lu, erreur fréquente sur les photos)
