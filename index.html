@@ -4277,9 +4277,13 @@ function findArticleByExactLabel(label, articles) {
 
 // Noms des articles déjà au catalogue, transmis à l'IA pour qu'elle les réutilise.
 function catalogHintForScan(articles) {
-  const names = (articles || []).map((a) => a.name).filter(Boolean).slice(0, 300);
-  if (!names.length) return '';
-  return "\n\nPRODUITS DÉJÀ AU CATALOGUE : " + names.map((n) => '« ' + n + ' »').join(', ') +
+  const list = (articles || []).filter((a) => a.name).slice(0, 300);
+  const rules = "\n\nCONDITIONNEMENTS : « P06 », « C6 », « X6 », « 6X1L », « (C24) » indiquent le nombre d'unités par colis ; si la quantité facturée est un nombre de colis, multiplie par ce nombre. " +
+    "Un produit vendu à la pièce dont le poids ou le volume est indiqué (« Pain 400 g », « Bouteille 75 cl ») : converted_qty = nombre de pièces × poids ou volume unitaire. " +
+    "Vérifie toujours que converted_qty × prix unitaire = montant de la ligne et que le prix au kg ou au litre est réaliste.";
+  if (!list.length) return rules;
+  return rules + "\n\nPRODUITS DÉJÀ AU CATALOGUE (avec leur unité) : " + list.map((a) => '« ' + a.name + ' » (' + (a.unit || 'kg') + ')').join(', ') +
+    ".\nPour une ligne qui correspond à l'un de ces produits, exprime \"converted_qty\" et \"master_unit\" dans l'unité indiquée entre parenthèses (par ex. des bouteilles de 50 cl d'un produit en L : nombre × 0,5)" +
     ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Attention : un ingrédient n'est pas le même produit qu'un produit préparé qui le contient (« ANANAS » n'est pas « Glace à l'ananas », « LAIT » n'est pas « Lait de coco »). Sinon, donne un nom court et générique sans le conditionnement.";
 }
 
@@ -11745,9 +11749,15 @@ function quantityChecks(purchases, articles, checked = []) {
   for (const p of purchases || []) {
     if (!p.date || p.date < sinceStr || p.kind === 'other') continue;
     (p.items || []).forEach((it, idx) => {
-      if (!it.articleId || !(it.pricePerMasterUnit > 0)) return;
       const id = `${p.id}:${idx}`;
       if (checkedSet.has(id)) return;
+      // Montant sans quantité : la quantité n'a pas été lue
+      if (it.total > 0 && !(it.convertedQty > 0)) {
+        const a = (articles || []).find((x) => x.id === it.articleId);
+        out.push({ id, purchase: p, item: it, article: a || { name: it.label || it.productName || 'Ligne', unit: it.masterUnit || '' }, usual: 0, ratio: 0, missing: true });
+        return;
+      }
+      if (!it.articleId || !(it.pricePerMasterUnit > 0)) return;
       const usual = usualPriceFor(it.articleId, purchases, p.id, it.variantId);
       if (!isUnusualPrice(it.pricePerMasterUnit, usual)) return;
       const article = (articles || []).find((a) => a.id === it.articleId);
@@ -11784,14 +11794,15 @@ function QuantityChecksSection({ purchases, articles, alertSettings, setAlertSet
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>{c.article.name}</span>
                 <span className="mc-pill" style={{ background: palette.amber + '22', color: palette.amber, fontWeight: 600 }}>
-                  {c.ratio >= 1 ? `×${c.ratio.toFixed(1).replace('.', ',')} plus cher` : `÷${(1 / c.ratio).toFixed(1).replace('.', ',')} moins cher`}
+                  {c.missing ? 'quantité manquante' : c.ratio >= 1 ? `×${c.ratio.toFixed(1).replace('.', ',')} plus cher` : `÷${(1 / c.ratio).toFixed(1).replace('.', ',')} moins cher`}
                 </span>
               </div>
-              <div style={{ fontSize: 13, marginTop: 3 }}>
+              {!c.missing && <div style={{ fontSize: 13, marginTop: 3 }}>
                 Lu <strong>{formatEuro(c.item.pricePerMasterUnit)}/{c.article.unit}</strong>
                 {' '}({String(Math.round((c.item.convertedQty || 0) * 100) / 100).replace('.', ',')} {c.article.unit} pour {formatEuro(c.item.total || 0)})
                 <span style={{ color: palette.inkSoft }}> · d'habitude {formatEuro(c.usual)}/{c.article.unit}</span>
-              </div>
+              </div>}
+              {c.missing && <div style={{ fontSize: 13, marginTop: 3 }}>Montant {formatEuro(c.item.total || 0)} sans quantité</div>}
               <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 2 }}>
                 {c.purchase.supplier || 'Fournisseur inconnu'}{c.purchase.invoiceNumber ? ` · facture ${c.purchase.invoiceNumber}` : ''} · {formatShortDate(c.purchase.date, { withYear: true })}
               </div>
@@ -11929,6 +11940,12 @@ function PurchaseLine({ item, index, articles, onUpdate, onRemove, usualPrice = 
           </button>
         </div>
       </div>
+
+      {item.total > 0 && !(item.convertedQty > 0) && (
+        <div style={{ marginTop: 8, padding: '6px 10px', background: palette.amber + '22', color: palette.ink, borderRadius: 6, fontSize: 12 }}>
+          <strong style={{ color: palette.amber }}>⚠ Quantité manquante :</strong> la quantité de cette ligne n'a pas été lue. Saisissez-la depuis la facture.
+        </div>
+      )}
 
       {unusual && (
         <div style={{ marginTop: 8, padding: '6px 10px', background: palette.amber + '22', color: palette.ink, borderRadius: 6, fontSize: 12 }}>
