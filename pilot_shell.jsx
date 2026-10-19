@@ -343,9 +343,10 @@ function pilotValidCategory(c) {
 function pilotCatalogHint() {
   let articles = [];
   try { articles = JSON.parse(localStorage.getItem('mc5:articles') || '[]'); } catch (e) {}
-  const names = articles.map((a) => a.name).filter(Boolean).slice(0, 300);
-  if (!names.length) return '';
-  return "\nPRODUITS DÉJÀ AU CATALOGUE : " + names.map((n) => '« ' + n + ' »').join(', ') +
+  const list = articles.filter((a) => a.name).slice(0, 300);
+  if (!list.length) return '';
+  return "\nPRODUITS DÉJÀ AU CATALOGUE (avec leur unité) : " + list.map((a) => '« ' + a.name + ' » (' + (a.unit || 'kg') + ')').join(', ') +
+    ".\nPour une ligne qui correspond à l'un de ces produits, exprime \"converted_qty\" et \"master_unit\" dans l'unité indiquée entre parenthèses (par ex. des bouteilles de 50 cl d'un produit en L : nombre × 0,5)" +
     ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Attention : un ingrédient n'est pas le même produit qu'un produit préparé qui le contient (« ANANAS » n'est pas « Glace à l'ananas », « LAIT » n'est pas « Lait de coco »). Sinon, donne un nom court et générique sans le conditionnement (ex. « Sorbet ananas Peyi » et non « Sorbet ananas Peyi 2,5L »).";
 }
 
@@ -355,6 +356,9 @@ function pilotSupplierHint() {
   const base = "\n\nNOM DU FOURNISSEUR : donne le nom commercial seul, sans adresse, sans ville et sans forme juridique (SARL, SAS…)." +
     "\nCATÉGORIE : pour chaque ligne, ajoute un champ \"category\" choisi exactement dans cette liste : " +
     pilotCategories().filter((c) => c !== 'À trier').map((c) => '« ' + c + ' »').join(', ') + "." +
+    "\nCONDITIONNEMENTS : « P06 », « C6 », « X6 », « 6X1L », « (C24) » indiquent le nombre d'unités par colis ; si la quantité facturée est un nombre de colis, multiplie par ce nombre. " +
+    "Un produit vendu à la pièce dont le poids ou le volume est indiqué (« Pain 400 g », « Bouteille 75 cl ») : converted_qty = nombre de pièces × poids ou volume unitaire. " +
+    "Vérifie toujours que converted_qty × prix unitaire = montant de la ligne et que le prix au kg ou au litre est réaliste." +
     "\nNATURE DE LA FACTURE : ajoute au premier niveau du JSON un champ \"invoice_type\" : " +
     "\"marchandises\" si la facture concerne surtout des produits revendus ou cuisinés (aliments, boissons) ou des consommables de cuisine et de service (emballages, sacs, gants, produits d'entretien) ; " +
     "\"autre\" pour tout le reste (carburant, garage, lavage auto, péage, électricité, téléphone, loyer, assurance, honoraires, réparation, travaux, vêtements, matériel, instruments, abonnements…).";
@@ -365,11 +369,11 @@ function pilotSupplierHint() {
     "mets exactement ce nom dans \"supplier\". En cas de doute, garde le nom lu sur la facture.";
 }
 
-async function pilotScanOnce(model, sourceBlock, scanPrompt) {
+async function pilotScanOnce(model, sourceBlock, scanPrompt, extraHint = '') {
   const response = await fetch('/api/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-access-code': pilotGetCode() },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt + pilotSupplierHint() }] }] }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt + pilotSupplierHint() + extraHint }] }] }),
   });
   if (!response.ok) {
     const errText = await response.text();
@@ -419,10 +423,26 @@ function pilotCheckInvoice(inv) {
 }
 
 // Prix au kilo / litre / pièce très éloigné de l'habitude → quantité sans doute mal lue.
+// Lignes lues pendant cette session (lot en cours, pas encore enregistré) :
+// elles servent d'historique de prix pour les factures suivantes du lot.
+function pilotSessionPurchases() { return window.__pilotSessionLines || (window.__pilotSessionLines = []); }
+function pilotRememberLines(inv, articles) {
+  if (!articles || !articles.length) return;
+  const items = [];
+  for (const it of inv.items || []) {
+    const label = it.raw_label || it.product_name || '';
+    const m = pilotFindByExactLabel(label, articles) || findArticleByLabel(label, articles);
+    const qty = Number(it.converted_qty) || 0, total = Number(it.total_ht) || 0;
+    if (m && qty > 0 && total > 0) items.push({ articleId: m.article.id, variantId: m.variant && m.variant.id, pricePerMasterUnit: total / qty });
+  }
+  if (items.length) pilotSessionPurchases().push({ id: 'session-' + pilotSessionPurchases().length, date: inv.date || '', items });
+}
+
 function pilotUnusualPrices(inv, articles) {
   if (!articles || !articles.length) return [];
   let purchases = [];
   try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
+  purchases = purchases.concat(pilotSessionPurchases());
   const out = [];
   for (const it of inv.items || []) {
     const label = it.raw_label || it.product_name || '';
@@ -431,9 +451,7 @@ function pilotUnusualPrices(inv, articles) {
     if (!m || !(qty > 0) || !(total > 0)) continue;
     const usual = usualPriceFor(m.article.id, purchases, null, m.variant && m.variant.id);
     const price = total / qty;
-    // Relecture seulement si l'écart est flagrant (×2) ; en dessous, la ligne
-    // est juste signalée en orange dans la fiche facture.
-    if (usual > 0 && (price / usual > 2 || usual / price > 2)) out.push(`prix inhabituel : ${label} (${(total / qty).toFixed(2)} au lieu de ${usual.toFixed(2)})`);
+    if (isUnusualPrice(price, usual)) out.push(`prix inhabituel : « ${label} » lu à ${price.toFixed(2)} €/${m.article.unit || 'unité'} alors que ce restaurant paie d'habitude ${usual.toFixed(2)} €/${m.article.unit || 'unité'}`);
   }
   return out;
 }
@@ -447,10 +465,18 @@ async function pilotScanWithFallback(sourceBlock, scanPrompt, articles) {
     if (e instanceof PilotHardError) throw e;
     problems = [e.message];
   }
-  if (!problems.length) return first;
+  if (!problems.length) { pilotRememberLines(first, articles); return first; }
   console.log('[Scan] relecture par Sonnet : ' + problems.join(' ; '));
-  const second = await pilotScanOnce(PILOT_SAFE_MODEL, sourceBlock, scanPrompt);
+  // On dit au second modèle ce qui cloche, pour qu'il relise ces lignes-là.
+  const priceIssues = problems.filter((p) => p.startsWith('prix inhabituel'));
+  const extra = priceIssues.length
+    ? "\n\nVÉRIFICATION DEMANDÉE : une première lecture a donné ces prix, très différents de d'habitude :\n- " +
+      priceIssues.map((p) => p.replace(/^prix inhabituel : /, '')).join('\n- ') +
+      "\nRelis attentivement la quantité de ces lignes (nombre de colis × contenance ou poids du colis). Si la facture confirme ce prix, garde-le."
+    : '';
+  const second = await pilotScanOnce(PILOT_SAFE_MODEL, sourceBlock, scanPrompt, extra);
   const left = pilotCheckInvoice(second).concat(pilotUnusualPrices(second, articles));
+  pilotRememberLines(second, articles);
   mcToast.success(left.length
     ? 'Facture difficile : relue deux fois, vérifiez les lignes signalées'
     : 'Facture difficile : lecture vérifiée deux fois');
