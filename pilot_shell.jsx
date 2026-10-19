@@ -360,8 +360,8 @@ function pilotCheckInvoice(inv) {
   if (!String(inv.supplier || '').trim()) pb.push('fournisseur manquant');
   const d = inv.date ? new Date(inv.date + 'T12:00:00') : null;
   const now = new Date();
-  if (!d || isNaN(d)) pb.push('date illisible');
-  else if (d - now > 7 * 86400000 || now - d > 3 * 365 * 86400000) pb.push('date improbable');
+  if (d && isNaN(d)) pb.push('date illisible');
+  else if (d && (d - now > 7 * 86400000 || now - d > 3 * 365 * 86400000)) pb.push('date improbable');
   // 1. Somme des lignes = total HT
   const sum = items.reduce((s, it) => s + n(it.total_ht), 0);
   const ht = n(inv.total_ht);
@@ -374,7 +374,8 @@ function pilotCheckInvoice(inv) {
     // 3. Un volume ou un poids dans le libellé doit donner des L ou des kg
     const unit = String(it.master_unit || '').toLowerCase();
     // (« SL » = « 5L » mal lu, erreur fréquente sur les photos)
-    if (/(\d\s*(l|cl|ml|kg|g)|\bSL)\b/i.test(label) && /pi[eè]ce|^u$|unit/.test(unit)) pb.push(`unité à vérifier : ${label}`);
+    const consumable = /\b(SAC|SACS|GOBELET|GANT|GANTS|BARQUETTE|FILM|ALU|ALUMINIUM|SERVIETTE|PAILLE|TABLIER|POUBELLE|ASSIETTE|COUVERCLE|POT\s+CARTON|BOITE\s+PIZZA|ESSUIE|PAPIER|DETERGENT|LESSIVE|JAVEL|LIQUIDE\s+VAISSELLE)\b/i.test(label);
+    if (!consumable && /(\d\s*(l|cl|ml|kg|g)|\bSL)\b/i.test(label) && /pi[eè]ce|^u$|unit/.test(unit)) pb.push(`unité à vérifier : ${label}`);
   }
   return pb;
 }
@@ -435,9 +436,29 @@ function pilotEditDistance(a, b) {
   return dp[a.length][b.length];
 }
 
+// Corrections faites par l'utilisateur : « nom lu » → « vrai fournisseur ».
+const PILOT_ALIAS_KEY = 'mc5:supplierAliases';
+function pilotAliases() { try { return JSON.parse(localStorage.getItem(PILOT_ALIAS_KEY) || '{}'); } catch (e) { return {}; } }
+function pilotRememberSupplierAlias(readName, finalName) {
+  const k = pilotSupplierKey(readName).join('');
+  if (!k || !String(finalName || '').trim() || pilotSupplierKey(finalName).join('') === k) return;
+  const a = pilotAliases(); a[k] = finalName.trim();
+  try { localStorage.setItem(PILOT_ALIAS_KEY, JSON.stringify(a)); } catch (e) {}
+  if (window.__pilotSave) window.__pilotSave(PILOT_ALIAS_KEY);
+}
+function pilotKnownSuppliers() {
+  let purchases = [];
+  try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
+  const counts = {};
+  for (const p of purchases) { const s = (p.supplier || '').trim(); if (s) counts[s] = (counts[s] || 0) + 1; }
+  return counts;
+}
+
 // Renvoie le nom du fournisseur déjà enregistré (le plus utilisé) s'il correspond.
 function pilotMatchSupplier(name) {
   if (!name) return name;
+  const alias = pilotAliases()[pilotSupplierKey(name).join('')];
+  if (alias) return alias;
   let purchases = [];
   try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
   const counts = {};

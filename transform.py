@@ -286,6 +286,20 @@ rep("""  const parsed = extractInvoiceJson(rawText);
 # ── K. Un fournisseur déjà connu garde son nom d'origine ───────────────
 rep("""    supplier: parsed.supplier || '',""", """    supplier: pilotMatchSupplier(parsed.supplier || ''),""")
 
+# ── L. Fournisseur : liste des fournisseurs connus + mémorisation des corrections ──
+rep("""    supplier: pilotMatchSupplier(parsed.supplier || ''),""", """    supplier: pilotMatchSupplier(parsed.supplier || ''),
+    scannedSupplier: parsed.supplier || '',""")
+rep("""    onSave({ ...form, total: computedTotal });""", """    if (initial.scannedSupplier) pilotRememberSupplierAlias(initial.scannedSupplier, form.supplier);
+    const { scannedSupplier, ...clean } = form;
+    onSave({ ...clean, total: computedTotal });""")
+rep("""            <label className="mc-label">Fournisseur</label>
+            <input className="mc-input" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} />""",
+"""            <label className="mc-label">Fournisseur</label>
+            <input className="mc-input" list="pilot-suppliers" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} />
+            <datalist id="pilot-suppliers">
+              {Object.keys(pilotKnownSuppliers()).sort().map((s) => <option key={s} value={s} />)}
+            </datalist>""")
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 
