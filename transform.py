@@ -300,6 +300,54 @@ rep("""            <label className="mc-label">Fournisseur</label>
               {Object.keys(pilotKnownSuppliers()).sort().map((s) => <option key={s} value={s} />)}
             </datalist>""")
 
+# ── M. « Tout enregistrer » : chaque facture du lot doit voir les précédentes ──
+# (sinon setPurchases([...purchases, x]) en boucle ne garde que la dernière)
+rep("""  const handleSave = useCallback(
+    (data) => {
+      let updatedArticles = [...articles];
+""", """  const pilotArticlesRef = useRef(articles);
+  const pilotPurchasesRef = useRef(purchases);
+  pilotArticlesRef.current = articles;
+  pilotPurchasesRef.current = purchases;
+  const handleSave = useCallback(
+    (data) => {
+      const articles = pilotArticlesRef.current;
+      const purchases = pilotPurchasesRef.current;
+      let updatedArticles = [...articles];
+""")
+rep("""      setArticles(updatedArticles);
+
+      const finalPurchase = { ...data, items: finalItems };
+      if (data.id && purchases.find((p) => p.id === data.id)) {
+        setPurchases(purchases.map((p) => (p.id === data.id ? finalPurchase : p)));
+      } else {
+        setPurchases([...purchases, { ...finalPurchase, id: finalPurchase.id || generateId('p') }]);
+      }
+""", """      pilotArticlesRef.current = updatedArticles;
+      setArticles(updatedArticles);
+
+      const { scannedSupplier, ...cleanData } = data;
+      const finalPurchase = { ...cleanData, items: finalItems };
+      const nextPurchases = (data.id && purchases.find((p) => p.id === data.id))
+        ? purchases.map((p) => (p.id === data.id ? finalPurchase : p))
+        : [...purchases, { ...finalPurchase, id: finalPurchase.id || generateId('p') }];
+      pilotPurchasesRef.current = nextPurchases;
+      setPurchases(nextPurchases);
+""")
+
+# ── N. Catégorie proposée par l'IA pour les nouveaux articles ──────────
+rep("""      packagingDesc: item.packaging_description || '',""", """      packagingDesc: item.packaging_description || '',
+      category: item.category || '',""")
+rep("""          updatedArticles.push({
+            id: newArticleId,
+            name: item.productName,
+            unit: item.masterUnit || 'kg',
+            category: '',""", """          updatedArticles.push({
+            id: newArticleId,
+            name: item.productName,
+            unit: item.masterUnit || 'kg',
+            category: pilotValidCategory(item.category),""")
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 

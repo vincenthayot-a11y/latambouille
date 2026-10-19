@@ -4189,6 +4189,7 @@ async function scanInvoiceFile(file, articles) {
       pricePerMasterUnit: item.price_per_master_unit || 0,
       total: item.total_ht || 0,
       packagingDesc: item.packaging_description || '',
+      category: item.category || '',
     };
   });
 
@@ -10887,8 +10888,14 @@ function PurchasesView({ context }) {
    * either matches against existing aliases OR creates a new article + variant.
    * Also auto-registers new aliases and packagings on the matched variant.
    */
+  const pilotArticlesRef = useRef(articles);
+  const pilotPurchasesRef = useRef(purchases);
+  pilotArticlesRef.current = articles;
+  pilotPurchasesRef.current = purchases;
   const handleSave = useCallback(
     (data) => {
+      const articles = pilotArticlesRef.current;
+      const purchases = pilotPurchasesRef.current;
       let updatedArticles = [...articles];
 
       const finalItems = data.items.map((item) => {
@@ -11038,7 +11045,7 @@ function PurchasesView({ context }) {
             id: newArticleId,
             name: item.productName,
             unit: item.masterUnit || 'kg',
-            category: '',
+            category: pilotValidCategory(item.category),
             variants: [
               {
                 id: newVariantId,
@@ -11060,14 +11067,16 @@ function PurchasesView({ context }) {
         return item;
       });
 
+      pilotArticlesRef.current = updatedArticles;
       setArticles(updatedArticles);
 
-      const finalPurchase = { ...data, items: finalItems };
-      if (data.id && purchases.find((p) => p.id === data.id)) {
-        setPurchases(purchases.map((p) => (p.id === data.id ? finalPurchase : p)));
-      } else {
-        setPurchases([...purchases, { ...finalPurchase, id: finalPurchase.id || generateId('p') }]);
-      }
+      const { scannedSupplier, ...cleanData } = data;
+      const finalPurchase = { ...cleanData, items: finalItems };
+      const nextPurchases = (data.id && purchases.find((p) => p.id === data.id))
+        ? purchases.map((p) => (p.id === data.id ? finalPurchase : p))
+        : [...purchases, { ...finalPurchase, id: finalPurchase.id || generateId('p') }];
+      pilotPurchasesRef.current = nextPurchases;
+      setPurchases(nextPurchases);
 
       setEditingPurchase(null);
       setScanResult(null);
@@ -22162,10 +22171,21 @@ class PilotHardError extends Error {}
 
 // Donne à l'IA la liste des fournisseurs déjà enregistrés, pour qu'elle réutilise
 // le même nom (utile surtout pour les factures manuscrites, lues différemment à chaque fois).
+function pilotCategories() {
+  try { const u = JSON.parse(localStorage.getItem('mc5:userSettings') || 'null'); if (u && Array.isArray(u.articleCategories) && u.articleCategories.length) return u.articleCategories; } catch (e) {}
+  return ARTICLE_CATEGORIES;
+}
+function pilotValidCategory(c) {
+  const list = pilotCategories();
+  return list.includes(c) ? c : (list.includes('À trier') ? 'À trier' : '');
+}
+
 function pilotSupplierHint() {
   const counts = pilotKnownSuppliers();
   const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 80);
-  const base = "\n\nNOM DU FOURNISSEUR : donne le nom commercial seul, sans adresse, sans ville et sans forme juridique (SARL, SAS…).";
+  const base = "\n\nNOM DU FOURNISSEUR : donne le nom commercial seul, sans adresse, sans ville et sans forme juridique (SARL, SAS…)." +
+    "\nCATÉGORIE : pour chaque ligne, ajoute un champ \"category\" choisi exactement dans cette liste : " +
+    pilotCategories().filter((c) => c !== 'À trier').map((c) => '« ' + c + ' »').join(', ') + ".";
   if (!names.length) return base;
   return base + "\nFournisseurs déjà enregistrés par ce restaurant : " + names.map((n) => '« ' + n + ' »').join(', ') +
     ".\nSi cette facture vient manifestement de l'un d'eux (même nom malgré une écriture ou une orthographe différente, même adresse), " +
