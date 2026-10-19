@@ -413,7 +413,7 @@ async function pilotScanWithFallback(sourceBlock, scanPrompt) {
     problems = [e.message];
   }
   if (!problems.length) return first;
-  console.log('[Scan] relecture par Sonnet :', problems);
+  console.log('[Scan] relecture par Sonnet : ' + problems.join(' ; '));
   const second = await pilotScanOnce(PILOT_SAFE_MODEL, sourceBlock, scanPrompt);
   const left = pilotCheckInvoice(second);
   mcToast.success(left.length
