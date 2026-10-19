@@ -4254,6 +4254,25 @@ function extractInvoiceJson(rawText) {
  * is the latest snapshot — for batch flows the caller should pass an updated
  * snapshot between invoices to leverage progressive learning of aliases.
  */
+// Libellé de facture identique (aux espaces/accents près) à un alias déjà connu.
+function findArticleByExactLabel(label, articles) {
+  const norm = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  const k = norm(label);
+  if (k.length < 4) return null;
+  for (const article of articles) for (const variant of (article.variants || [])) {
+    if (norm(variant.name) === k || (variant.aliases || []).some((a) => norm(a.label) === k)) return { article, variant };
+  }
+  return null;
+}
+
+// Noms des articles déjà au catalogue, transmis à l'IA pour qu'elle les réutilise.
+function catalogHintForScan(articles) {
+  const names = (articles || []).map((a) => a.name).filter(Boolean).slice(0, 300);
+  if (!names.length) return '';
+  return "\n\nPRODUITS DÉJÀ AU CATALOGUE : " + names.map((n) => '« ' + n + ' »').join(', ') +
+    ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Sinon, donne un nom court et générique sans le conditionnement.";
+}
+
 async function scanInvoiceFile(file, articles) {
   // Step 1: read file as base64
   const base64 = await new Promise((resolve, reject) => {
@@ -4277,7 +4296,7 @@ async function scanInvoiceFile(file, articles) {
     body: JSON.stringify({
       model: chosenModel,
       max_tokens: 4096,
-      messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt }] }],
+      messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt + catalogHintForScan(articles) }] }],
     }),
   });
 
@@ -11016,8 +11035,16 @@ function PurchasesView({ context }) {
    * either matches against existing aliases OR creates a new article + variant.
    * Also auto-registers new aliases and packagings on the matched variant.
    */
+  // Refs : « Tout enregistrer » appelle handleSave plusieurs fois de suite,
+  // avant que React n'ait re-rendu. Sans elles, seule la dernière facture était gardée.
+  const latestArticlesRef = useRef(articles);
+  const latestPurchasesRef = useRef(purchases);
+  latestArticlesRef.current = articles;
+  latestPurchasesRef.current = purchases;
   const handleSave = useCallback(
     (data) => {
+      const articles = latestArticlesRef.current;
+      const purchases = latestPurchasesRef.current;
       let updatedArticles = [...articles];
 
       const finalItems = data.items.map((item) => {
@@ -11128,7 +11155,7 @@ function PurchasesView({ context }) {
 
         // Case 2: not linked yet, with a product name → match or create
         if (item.productName) {
-          const match = findArticleByLabel(item.productName, updatedArticles);
+          const match = findArticleByExactLabel(item.label, updatedArticles) || findArticleByLabel(item.productName, updatedArticles);
 
           if (match) {
             // Auto-register alias on the matched variant
@@ -11136,15 +11163,14 @@ function PurchasesView({ context }) {
             const variantIdx = updatedArticles[ingIdx].variants.findIndex((v) => v.id === match.variant.id);
             const variant = updatedArticles[ingIdx].variants[variantIdx];
 
-            if (
-              variant.name !== item.productName &&
-              !(variant.aliases || []).some((a) => a.label === item.productName)
-            ) {
+            const newLabels = [item.productName, item.label].filter((l, i, arr) => l && arr.indexOf(l) === i &&
+              l !== variant.name && !(variant.aliases || []).some((a) => a.label === l));
+            if (newLabels.length) {
               const updatedVariant = {
                 ...variant,
                 aliases: [
                   ...(variant.aliases || []),
-                  { label: item.productName, supplier: data.supplier || '' },
+                  ...newLabels.map((l) => ({ label: l, supplier: data.supplier || '' })),
                 ],
               };
               const newVariants = [...updatedArticles[ingIdx].variants];
@@ -11172,7 +11198,7 @@ function PurchasesView({ context }) {
               {
                 id: newVariantId,
                 name: item.productName,
-                aliases: [],
+                aliases: (item.label && item.label !== item.productName) ? [{ label: item.label, supplier: data.supplier || '' }] : [],
                 packagings: [],
               },
             ],
@@ -11189,14 +11215,15 @@ function PurchasesView({ context }) {
         return item;
       });
 
+      latestArticlesRef.current = updatedArticles;
       setArticles(updatedArticles);
 
       const finalPurchase = { ...data, items: finalItems };
-      if (data.id && purchases.find((p) => p.id === data.id)) {
-        setPurchases(purchases.map((p) => (p.id === data.id ? finalPurchase : p)));
-      } else {
-        setPurchases([...purchases, { ...finalPurchase, id: finalPurchase.id || generateId('p') }]);
-      }
+      const nextPurchases = (data.id && purchases.find((p) => p.id === data.id))
+        ? purchases.map((p) => (p.id === data.id ? finalPurchase : p))
+        : [...purchases, { ...finalPurchase, id: finalPurchase.id || generateId('p') }];
+      latestPurchasesRef.current = nextPurchases;
+      setPurchases(nextPurchases);
 
       setEditingPurchase(null);
       setScanResult(null);
