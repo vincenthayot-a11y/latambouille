@@ -338,14 +338,26 @@ function pilotValidCategory(c) {
   return list.includes(c) ? c : (list.includes('À trier') ? 'À trier' : '');
 }
 
+// Noms des articles déjà au catalogue : l'IA les réutilise pour éviter les doublons
+// (« Sorbet ananas Peyi 2,5L » et « Sorbet ananas Peyi » = un seul article).
+function pilotCatalogHint() {
+  let articles = [];
+  try { articles = JSON.parse(localStorage.getItem('mc5:articles') || '[]'); } catch (e) {}
+  const names = articles.map((a) => a.name).filter(Boolean).slice(0, 300);
+  if (!names.length) return '';
+  return "\nPRODUITS DÉJÀ AU CATALOGUE : " + names.map((n) => '« ' + n + ' »').join(', ') +
+    ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Sinon, donne un nom court et générique sans le conditionnement (ex. « Sorbet ananas Peyi » et non « Sorbet ananas Peyi 2,5L »).";
+}
+
 function pilotSupplierHint() {
   const counts = pilotKnownSuppliers();
   const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 80);
   const base = "\n\nNOM DU FOURNISSEUR : donne le nom commercial seul, sans adresse, sans ville et sans forme juridique (SARL, SAS…)." +
     "\nCATÉGORIE : pour chaque ligne, ajoute un champ \"category\" choisi exactement dans cette liste : " +
     pilotCategories().filter((c) => c !== 'À trier').map((c) => '« ' + c + ' »').join(', ') + ".";
-  if (!names.length) return base;
-  return base + "\nFournisseurs déjà enregistrés par ce restaurant : " + names.map((n) => '« ' + n + ' »').join(', ') +
+  const catalog = pilotCatalogHint();
+  if (!names.length) return base + catalog;
+  return base + catalog + "\nFournisseurs déjà enregistrés par ce restaurant : " + names.map((n) => '« ' + n + ' »').join(', ') +
     ".\nSi cette facture vient manifestement de l'un d'eux (même nom malgré une écriture ou une orthographe différente, même adresse), " +
     "mets exactement ce nom dans \"supplier\". En cas de doute, garde le nom lu sur la facture.";
 }

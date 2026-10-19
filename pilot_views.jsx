@@ -506,7 +506,10 @@ function pilotAlertGroups(purchases, articles, alertsIndex, alertSettings) {
   const anomalies = pilotInvoiceAnomalies(purchases, articles, alertSettings?.checkedAnomalies || []);
   const trendIds = new Set(anomalies.map((a) => a.article.id));
   const trends = alertsIndex.filter((a) => a.type === ALERT_TYPES.PRICE_TREND && !trendIds.has(a.article.id));
-  const stock = alertsIndex.filter((a) => a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY);
+  // Stock : seulement avec un inventaire ou un seuil saisi à la main
+  // (une estimation à partir des seuls achats donne « 0 » partout).
+  const stock = alertsIndex.filter((a) => (a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY) &&
+    (a.thresholdSource === 'manual' || (!a.estimatedFromPurchases && a.thresholdSource !== 'purchase_history' && a.type !== ALERT_TYPES.STOCK_EMPTY)));
   const gaps = alertsIndex.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP);
   return { anomalies, trends, stock, gaps, count: anomalies.length + trends.length + stock.length };
 }

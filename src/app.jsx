@@ -11014,15 +11014,14 @@ function PurchasesView({ context }) {
             const variantIdx = updatedArticles[ingIdx].variants.findIndex((v) => v.id === match.variant.id);
             const variant = updatedArticles[ingIdx].variants[variantIdx];
 
-            if (
-              variant.name !== item.productName &&
-              !(variant.aliases || []).some((a) => a.label === item.productName)
-            ) {
+            const newLabels = [item.productName, item.label].filter((l, i, arr) => l && arr.indexOf(l) === i &&
+              l !== variant.name && !(variant.aliases || []).some((a) => a.label === l));
+            if (newLabels.length) {
               const updatedVariant = {
                 ...variant,
                 aliases: [
                   ...(variant.aliases || []),
-                  { label: item.productName, supplier: data.supplier || '' },
+                  ...newLabels.map((l) => ({ label: l, supplier: data.supplier || '' })),
                 ],
               };
               const newVariants = [...updatedArticles[ingIdx].variants];
@@ -11050,7 +11049,7 @@ function PurchasesView({ context }) {
               {
                 id: newVariantId,
                 name: item.productName,
-                aliases: [],
+                aliases: (item.label && item.label !== item.productName) ? [{ label: item.label, supplier: data.supplier || '' }] : [],
                 packagings: [],
               },
             ],
@@ -22180,14 +22179,26 @@ function pilotValidCategory(c) {
   return list.includes(c) ? c : (list.includes('À trier') ? 'À trier' : '');
 }
 
+// Noms des articles déjà au catalogue : l'IA les réutilise pour éviter les doublons
+// (« Sorbet ananas Peyi 2,5L » et « Sorbet ananas Peyi » = un seul article).
+function pilotCatalogHint() {
+  let articles = [];
+  try { articles = JSON.parse(localStorage.getItem('mc5:articles') || '[]'); } catch (e) {}
+  const names = articles.map((a) => a.name).filter(Boolean).slice(0, 300);
+  if (!names.length) return '';
+  return "\nPRODUITS DÉJÀ AU CATALOGUE : " + names.map((n) => '« ' + n + ' »').join(', ') +
+    ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Sinon, donne un nom court et générique sans le conditionnement (ex. « Sorbet ananas Peyi » et non « Sorbet ananas Peyi 2,5L »).";
+}
+
 function pilotSupplierHint() {
   const counts = pilotKnownSuppliers();
   const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 80);
   const base = "\n\nNOM DU FOURNISSEUR : donne le nom commercial seul, sans adresse, sans ville et sans forme juridique (SARL, SAS…)." +
     "\nCATÉGORIE : pour chaque ligne, ajoute un champ \"category\" choisi exactement dans cette liste : " +
     pilotCategories().filter((c) => c !== 'À trier').map((c) => '« ' + c + ' »').join(', ') + ".";
-  if (!names.length) return base;
-  return base + "\nFournisseurs déjà enregistrés par ce restaurant : " + names.map((n) => '« ' + n + ' »').join(', ') +
+  const catalog = pilotCatalogHint();
+  if (!names.length) return base + catalog;
+  return base + catalog + "\nFournisseurs déjà enregistrés par ce restaurant : " + names.map((n) => '« ' + n + ' »').join(', ') +
     ".\nSi cette facture vient manifestement de l'un d'eux (même nom malgré une écriture ou une orthographe différente, même adresse), " +
     "mets exactement ce nom dans \"supplier\". En cas de doute, garde le nom lu sur la facture.";
 }
@@ -22847,7 +22858,10 @@ function pilotAlertGroups(purchases, articles, alertsIndex, alertSettings) {
   const anomalies = pilotInvoiceAnomalies(purchases, articles, alertSettings?.checkedAnomalies || []);
   const trendIds = new Set(anomalies.map((a) => a.article.id));
   const trends = alertsIndex.filter((a) => a.type === ALERT_TYPES.PRICE_TREND && !trendIds.has(a.article.id));
-  const stock = alertsIndex.filter((a) => a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY);
+  // Stock : seulement avec un inventaire ou un seuil saisi à la main
+  // (une estimation à partir des seuls achats donne « 0 » partout).
+  const stock = alertsIndex.filter((a) => (a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY) &&
+    (a.thresholdSource === 'manual' || (!a.estimatedFromPurchases && a.thresholdSource !== 'purchase_history' && a.type !== ALERT_TYPES.STOCK_EMPTY)));
   const gaps = alertsIndex.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP);
   return { anomalies, trends, stock, gaps, count: anomalies.length + trends.length + stock.length };
 }

@@ -348,6 +348,47 @@ rep("""          updatedArticles.push({
             unit: item.masterUnit || 'kg',
             category: pilotValidCategory(item.category),""")
 
+# ── O. Catalogue : le libellé exact de la facture est mémorisé sur l'article ──
+rep("""          updatedArticles.push({
+            id: newArticleId,
+            name: item.productName,
+            unit: item.masterUnit || 'kg',
+            category: pilotValidCategory(item.category),
+            variants: [
+              {
+                id: newVariantId,
+                name: item.productName,
+                aliases: [],""", """          updatedArticles.push({
+            id: newArticleId,
+            name: item.productName,
+            unit: item.masterUnit || 'kg',
+            category: pilotValidCategory(item.category),
+            variants: [
+              {
+                id: newVariantId,
+                name: item.productName,
+                aliases: (item.label && item.label !== item.productName) ? [{ label: item.label, supplier: data.supplier || '' }] : [],""")
+rep("""            if (
+              variant.name !== item.productName &&
+              !(variant.aliases || []).some((a) => a.label === item.productName)
+            ) {
+              const updatedVariant = {
+                ...variant,
+                aliases: [
+                  ...(variant.aliases || []),
+                  { label: item.productName, supplier: data.supplier || '' },
+                ],
+              };""", """            const newLabels = [item.productName, item.label].filter((l, i, arr) => l && arr.indexOf(l) === i &&
+              l !== variant.name && !(variant.aliases || []).some((a) => a.label === l));
+            if (newLabels.length) {
+              const updatedVariant = {
+                ...variant,
+                aliases: [
+                  ...(variant.aliases || []),
+                  ...newLabels.map((l) => ({ label: l, supplier: data.supplier || '' })),
+                ],
+              };""")
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 
