@@ -22499,6 +22499,46 @@ function pilotUnusualPrices(inv, articles) {
   return out;
 }
 
+// Lignes d'un produit encore sans prix habituel (nouveau produit, ou acheté
+// rarement) : le contrôle de prix ne peut rien vérifier pour elles.
+function pilotHasUnknownLines(inv, articles) {
+  let purchases = [];
+  try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
+  purchases = purchases.concat(pilotSessionPurchases());
+  return (inv.items || []).some((it) => {
+    if (!(Number(it.total_ht) > 0)) return false;
+    const label = it.raw_label || it.product_name || '';
+    const m = (articles && articles.length) ? (pilotFindByExactLabel(label, articles) || findArticleByLabel(label, articles)) : null;
+    return !m || !(usualPriceFor(m.article.id, purchases, null, m.variant && m.variant.id) > 0);
+  });
+}
+
+// Compare deux lectures de la même facture : une quantité ou une unité qui
+// change d'une lecture à l'autre trahit une ligne mal lue.
+function pilotCompareReads(a, b) {
+  const out = [];
+  const num = (x) => Number(x) || 0;
+  const A = a.items || [], B = [...(b.items || [])];
+  for (const it of A) {
+    const t = num(it.total_ht);
+    let j = B.findIndex((x) => Math.abs(num(x.total_ht) - t) < 0.02 && pilotSameLabel(x.raw_label, it.raw_label));
+    if (j < 0) j = B.findIndex((x) => Math.abs(num(x.total_ht) - t) < 0.02);
+    if (j < 0) continue;
+    const x = B.splice(j, 1)[0];
+    const q1 = num(it.converted_qty), q2 = num(x.converted_qty);
+    const u1 = String(it.master_unit || '').toLowerCase(), u2 = String(x.master_unit || '').toLowerCase();
+    if (u1 !== u2 || Math.abs(q1 - q2) > Math.max(0.01, Math.max(q1, q2) * 0.02)) {
+      out.push(`« ${it.raw_label || it.product_name} » lu une fois ${q1} ${it.master_unit || ''} et une fois ${q2} ${x.master_unit || ''}`);
+    }
+  }
+  if ((a.items || []).length !== (b.items || []).length) out.push(`nombre de lignes : ${(a.items || []).length} puis ${(b.items || []).length}`);
+  return out;
+}
+function pilotSameLabel(x, y) {
+  const k = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  return k(x) === k(y);
+}
+
 async function pilotScanWithFallback(sourceBlock, scanPrompt, articles) {
   let first = null, problems = [];
   try {
@@ -22508,15 +22548,34 @@ async function pilotScanWithFallback(sourceBlock, scanPrompt, articles) {
     if (e instanceof PilotHardError) throw e;
     problems = [e.message];
   }
+  // Rien d'anormal, mais des produits sans prix habituel : une 2e lecture
+  // rapide sert de contrôle. Si les deux lectures diffèrent, on relit.
+  let disagreements = [];
+  if (!problems.length && first && pilotHasUnknownLines(first, articles)) {
+    try {
+      const check = await pilotScanOnce(PILOT_FAST_MODEL, sourceBlock, scanPrompt);
+      disagreements = pilotCompareReads(first, check);
+      if (disagreements.length) console.log('[Scan] double lecture en désaccord : ' + disagreements.join(' ; '));
+      else console.log('[Scan] double lecture : identique');
+    } catch (e) {
+      if (e instanceof PilotHardError) throw e;
+    }
+    problems = disagreements.map((d) => 'désaccord : ' + d);
+  }
   if (!problems.length) { pilotRememberLines(first, articles); return first; }
   console.log('[Scan] relecture par Sonnet : ' + problems.join(' ; '));
   // On dit au second modèle ce qui cloche, pour qu'il relise ces lignes-là.
   const priceIssues = problems.filter((p) => p.startsWith('prix inhabituel'));
-  const extra = priceIssues.length
+  let extra = priceIssues.length
     ? "\n\nVÉRIFICATION DEMANDÉE : une première lecture a donné ces prix, très différents de d'habitude :\n- " +
       priceIssues.map((p) => p.replace(/^prix inhabituel : /, '')).join('\n- ') +
       "\nRelis attentivement la quantité de ces lignes (nombre de colis × contenance ou poids du colis). Si la facture confirme ce prix, garde-le."
     : '';
+  if (disagreements.length) {
+    extra += "\n\nVÉRIFICATION DEMANDÉE : deux lectures de cette facture ne donnent pas la même chose :\n- " +
+      disagreements.join('\n- ') +
+      "\nRelis attentivement ces lignes sur la facture (nombre de colis × contenance ou poids du colis) et donne la bonne quantité.";
+  }
   const second = await pilotScanOnce(PILOT_SAFE_MODEL, sourceBlock, scanPrompt, extra);
   const left = pilotCheckInvoice(second).concat(pilotUnusualPrices(second, articles));
   pilotRememberLines(second, articles);
