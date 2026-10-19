@@ -11613,9 +11613,15 @@ function quantityChecks(purchases, articles, checked = []) {
   for (const p of purchases || []) {
     if (!p.date || p.date < sinceStr || p.kind === 'other') continue;
     (p.items || []).forEach((it, idx) => {
-      if (!it.articleId || !(it.pricePerMasterUnit > 0)) return;
       const id = `${p.id}:${idx}`;
       if (checkedSet.has(id)) return;
+      // Montant sans quantité : la quantité n'a pas été lue
+      if (it.total > 0 && !(it.convertedQty > 0)) {
+        const a = (articles || []).find((x) => x.id === it.articleId);
+        out.push({ id, purchase: p, item: it, article: a || { name: it.label || it.productName || 'Ligne', unit: it.masterUnit || '' }, usual: 0, ratio: 0, missing: true });
+        return;
+      }
+      if (!it.articleId || !(it.pricePerMasterUnit > 0)) return;
       const usual = usualPriceFor(it.articleId, purchases, p.id, it.variantId);
       if (!isUnusualPrice(it.pricePerMasterUnit, usual)) return;
       const article = (articles || []).find((a) => a.id === it.articleId);
@@ -11652,14 +11658,15 @@ function QuantityChecksSection({ purchases, articles, alertSettings, setAlertSet
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>{c.article.name}</span>
                 <span className="mc-pill" style={{ background: palette.amber + '22', color: palette.amber, fontWeight: 600 }}>
-                  {c.ratio >= 1 ? `×${c.ratio.toFixed(1).replace('.', ',')} plus cher` : `÷${(1 / c.ratio).toFixed(1).replace('.', ',')} moins cher`}
+                  {c.missing ? 'quantité manquante' : c.ratio >= 1 ? `×${c.ratio.toFixed(1).replace('.', ',')} plus cher` : `÷${(1 / c.ratio).toFixed(1).replace('.', ',')} moins cher`}
                 </span>
               </div>
-              <div style={{ fontSize: 13, marginTop: 3 }}>
+              {!c.missing && <div style={{ fontSize: 13, marginTop: 3 }}>
                 Lu <strong>{formatEuro(c.item.pricePerMasterUnit)}/{c.article.unit}</strong>
                 {' '}({String(Math.round((c.item.convertedQty || 0) * 100) / 100).replace('.', ',')} {c.article.unit} pour {formatEuro(c.item.total || 0)})
                 <span style={{ color: palette.inkSoft }}> · d'habitude {formatEuro(c.usual)}/{c.article.unit}</span>
-              </div>
+              </div>}
+              {c.missing && <div style={{ fontSize: 13, marginTop: 3 }}>Montant {formatEuro(c.item.total || 0)} sans quantité</div>}
               <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 2 }}>
                 {c.purchase.supplier || 'Fournisseur inconnu'}{c.purchase.invoiceNumber ? ` · facture ${c.purchase.invoiceNumber}` : ''} · {formatShortDate(c.purchase.date, { withYear: true })}
               </div>
