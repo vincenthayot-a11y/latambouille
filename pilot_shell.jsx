@@ -510,7 +510,8 @@ async function pilotScanWithFallback(sourceBlock, scanPrompt, articles) {
   // Rien d'anormal, mais des produits sans prix habituel : une 2e lecture
   // rapide sert de contrôle. Si les deux lectures diffèrent, on relit.
   let disagreements = [];
-  if (!problems.length && first && pilotHasUnknownLines(first, articles)) {
+  // (pas pour les factures hors marchandises : elles ne vont pas au catalogue)
+  if (!problems.length && first && first.invoice_type !== 'autre' && first.kind !== 'equipment' && pilotHasUnknownLines(first, articles)) {
     try {
       const check = await pilotScanOnce(PILOT_FAST_MODEL, sourceBlock, scanPrompt);
       disagreements = pilotCompareReads(first, check);
