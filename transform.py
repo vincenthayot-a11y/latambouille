@@ -503,6 +503,11 @@ rep("""        {status === 'duplicate' && (
               <Edit3 size={12} /> Voir
             </button>""")
 
+# ── R. Rattachement article : mêmes mots, plus de « contient » ──────────
+sys.path.insert(0, '/home/claude/pilot')
+import fix_matching
+s = fix_matching.patch(s)
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 

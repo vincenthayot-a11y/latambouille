@@ -346,7 +346,7 @@ function pilotCatalogHint() {
   const names = articles.map((a) => a.name).filter(Boolean).slice(0, 300);
   if (!names.length) return '';
   return "\nPRODUITS DÉJÀ AU CATALOGUE : " + names.map((n) => '« ' + n + ' »').join(', ') +
-    ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Sinon, donne un nom court et générique sans le conditionnement (ex. « Sorbet ananas Peyi » et non « Sorbet ananas Peyi 2,5L »).";
+    ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Attention : un ingrédient n'est pas le même produit qu'un produit préparé qui le contient (« ANANAS » n'est pas « Glace à l'ananas », « LAIT » n'est pas « Lait de coco »). Sinon, donne un nom court et générique sans le conditionnement (ex. « Sorbet ananas Peyi » et non « Sorbet ananas Peyi 2,5L »).";
 }
 
 function pilotSupplierHint() {

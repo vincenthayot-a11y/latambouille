@@ -2137,6 +2137,14 @@ function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, i
  *   3. Article master name match (returns the first variant as fallback)
  *   4. Partial alias match on a variant
  */
+const LABEL_STOP_WORDS = new Set(['de', 'du', 'des', 'la', 'le', 'les', 'l', 'd', 'a', 'au', 'aux', 'et', 'en', 'x',
+  'kg', 'g', 'gr', 'l', 'cl', 'ml', 'lt', 'pc', 'pce', 'pces', 'piece', 'pieces', 'u', 'un', 'unite', 'ctn', 'colis', 'carton', 'bte', 'boite', 'sac', 'seau', 'pot', 'bidon', 'pack', 'lot']);
+function labelWordsKey(text) {
+  const words = normalizeText(text).replace(/[^a-z0-9]+/g, ' ').split(' ')
+    .filter((w) => w && !/\d/.test(w) && !LABEL_STOP_WORDS.has(w));
+  return [...new Set(words)].sort().join(' ');
+}
+
 function findArticleByLabel(label, articles) {
   const target = normalizeText(label);
   if (!target) return null;
@@ -2169,16 +2177,18 @@ function findArticleByLabel(label, articles) {
     }
   }
 
-  // 4. Partial alias match
-  for (const article of articles) {
-    for (const variant of article.variants || []) {
-      if (
-        variant.aliases?.some((a) => {
-          const aliasLabel = normalizeText(a.label);
-          return aliasLabel.includes(target) || target.includes(aliasLabel);
-        })
-      ) {
-        return { article, variant };
+  // 4. Libellé proche : exactement les mêmes mots, sans tenir compte de
+  //    l'ordre, des accents ni du conditionnement (« SORBET ANANAS 2,5L » =
+  //    « Sorbet ananas »). Un libellé qui en CONTIENT un autre ne suffit pas :
+  //    « ANANAS » n'est pas « GLACE A L'ANANAS ».
+  const targetKey = labelWordsKey(label);
+  if (targetKey) {
+    for (const article of articles) {
+      for (const variant of article.variants || []) {
+        if (labelWordsKey(variant.name) === targetKey ||
+            variant.aliases?.some((a) => labelWordsKey(a.label) === targetKey)) {
+          return { article, variant };
+        }
       }
     }
   }
@@ -10926,6 +10936,17 @@ function PurchasesView({ context }) {
                 { label: item.label, supplier: data.supplier || '' },
               ],
             };
+          }
+
+          // Ce libellé appartient désormais à cette variante : on le retire des
+          // autres (corrige un mauvais rattachement une fois pour toutes).
+          if (item.label) {
+            const lbl = normalizeText(item.label);
+            updatedArticles = updatedArticles.map((a) =>
+              (a.variants || []).some((v) => v.id !== variant.id && (v.aliases || []).some((x) => normalizeText(x.label) === lbl))
+                ? { ...a, variants: a.variants.map((v) => v.id === variant.id ? v : { ...v, aliases: (v.aliases || []).filter((x) => normalizeText(x.label) !== lbl) }) }
+                : a
+            );
           }
 
           // Register packaging if novel
@@ -22242,7 +22263,7 @@ function pilotCatalogHint() {
   const names = articles.map((a) => a.name).filter(Boolean).slice(0, 300);
   if (!names.length) return '';
   return "\nPRODUITS DÉJÀ AU CATALOGUE : " + names.map((n) => '« ' + n + ' »').join(', ') +
-    ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Sinon, donne un nom court et générique sans le conditionnement (ex. « Sorbet ananas Peyi » et non « Sorbet ananas Peyi 2,5L »).";
+    ".\nSi une ligne correspond clairement à l'un de ces produits (même produit, quel que soit le conditionnement), mets exactement ce nom dans \"product_name\". Attention : un ingrédient n'est pas le même produit qu'un produit préparé qui le contient (« ANANAS » n'est pas « Glace à l'ananas », « LAIT » n'est pas « Lait de coco »). Sinon, donne un nom court et générique sans le conditionnement (ex. « Sorbet ananas Peyi » et non « Sorbet ananas Peyi 2,5L »).";
 }
 
 function pilotSupplierHint() {
