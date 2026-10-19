@@ -273,7 +273,7 @@ rep("""          alertsIndex={alertsIndex}
 rep("""  const chosenModel = await storageGet(STORAGE_KEYS.aiModel, DEFAULT_AI_MODEL);
   const scanPrompt = await storageGet(STORAGE_KEYS.scanPrompt, DEFAULT_SCAN_PROMPT);
   const response = await fetch('/api/scan', {""", """  const scanPrompt = await storageGet(STORAGE_KEYS.scanPrompt, DEFAULT_SCAN_PROMPT);
-  const parsed = await pilotScanWithFallback(sourceBlock, scanPrompt);
+  const parsed = await pilotScanWithFallback(sourceBlock, scanPrompt, articles);
   /* ancienne lecture directe, conservée pour référence :
   const response = await fetch('/api/scan', {""")
 rep("""  const parsed = extractInvoiceJson(rawText);
@@ -507,6 +507,10 @@ rep("""        {status === 'duplicate' && (
 sys.path.insert(0, '/home/claude/pilot')
 import fix_matching
 s = fix_matching.patch(s)
+
+# ── S. Prix inhabituel : ligne signalée dans la fiche facture ──────────
+import fix_price
+s = fix_price.patch(s)
 
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")

@@ -4151,7 +4151,7 @@ async function scanInvoiceFile(file, articles) {
 
   // Step 3: call API with the user's chosen model + API key
   const scanPrompt = await storageGet(STORAGE_KEYS.scanPrompt, DEFAULT_SCAN_PROMPT);
-  const parsed = await pilotScanWithFallback(sourceBlock, scanPrompt);
+  const parsed = await pilotScanWithFallback(sourceBlock, scanPrompt, articles);
   /* ancienne lecture directe, conservée pour référence :
   const response = await fetch('/api/scan', {
     method: 'POST',
@@ -11533,6 +11533,7 @@ function PurchaseModal({ initial, onSave, onClose, articles, fromScan, existingP
               articles={articles}
               onUpdate={updateLine}
               onRemove={removeLine}
+              usualPrice={usualPriceFor(item.articleId, existingPurchases, form.id, item.variantId)}
             />
           ))}
         </section>
@@ -11564,14 +11565,44 @@ function PurchaseModal({ initial, onSave, onClose, articles, fromScan, existingP
 
 // ─── Purchase line with article + variant selectors ────────────────────
 
-function PurchaseLine({ item, index, articles, onUpdate, onRemove }) {
+// ─── Prix habituel d'un article ─────────────────────────────────────────
+// Médiane des prix payés sur ses 10 dernières lignes de facture. Un prix qui
+// s'en écarte de plus de 45 % trahit souvent une quantité mal lue (colis
+// compté comme une bouteille, poids mal lu…).
+const UNUSUAL_PRICE_RATIO = 1.45;
+function usualPriceFor(articleId, purchases, excludePurchaseId, variantId) {
+  if (!articleId) return 0;
+  const seen = [], seenVariant = [];
+  for (const p of purchases || []) {
+    if (excludePurchaseId && p.id === excludePurchaseId) continue;
+    for (const it of p.items || []) {
+      if (it.articleId !== articleId || !(it.pricePerMasterUnit > 0)) continue;
+      seen.push([p.date || '', it.pricePerMasterUnit]);
+      if (variantId && it.variantId === variantId) seenVariant.push([p.date || '', it.pricePerMasterUnit]);
+    }
+  }
+  // Même référence d'abord (deux marques d'un même article n'ont pas le même prix)
+  if (seenVariant.length) return usualPriceMedian(seenVariant);
+  if (!seen.length) return 0;
+  return usualPriceMedian(seen);
+}
+function usualPriceMedian(seen) {
+  const last = seen.sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, 10).map((x) => x[1]).sort((a, b) => a - b);
+  return last[Math.floor(last.length / 2)];
+}
+function isUnusualPrice(price, usual) {
+  return usual > 0 && price > 0 && (price / usual > UNUSUAL_PRICE_RATIO || usual / price > UNUSUAL_PRICE_RATIO);
+}
+
+function PurchaseLine({ item, index, articles, onUpdate, onRemove, usualPrice = 0 }) {
   const matchedArticle = item.articleId ? articles.find((i) => i.id === item.articleId) : null;
   const matchedVariant = matchedArticle?.variants?.find((v) => v.id === item.variantId);
   const masterUnit = matchedArticle ? matchedArticle.unit : item.masterUnit || 'kg';
+  const unusual = isUnusualPrice(item.pricePerMasterUnit, usualPrice);
   const isMobile = useIsMobile(720);
 
   return (
-    <div style={{ padding: 14, background: palette.paper, borderRadius: 8, marginBottom: 8 }}>
+    <div style={{ padding: 14, background: unusual ? palette.amber + '14' : palette.paper, border: unusual ? `1px solid ${palette.amber}66` : '1px solid transparent', borderRadius: 8, marginBottom: 8 }}>
       {item.label && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: palette.sage, marginBottom: 8 }}>
           <Tag size={11} /> <strong>Libellé facture :</strong> {item.label}
@@ -11681,6 +11712,13 @@ function PurchaseLine({ item, index, articles, onUpdate, onRemove }) {
           </button>
         </div>
       </div>
+
+      {unusual && (
+        <div style={{ marginTop: 8, padding: '6px 10px', background: palette.amber + '22', color: palette.ink, borderRadius: 6, fontSize: 12 }}>
+          <strong style={{ color: palette.amber }}>⚠ Prix inhabituel :</strong> {formatEuro(item.pricePerMasterUnit)}/{masterUnit}, d'habitude {formatEuro(usualPrice)}/{masterUnit}.
+          {' '}Vérifiez la quantité sur la facture (colis de plusieurs bouteilles, poids…).
+        </div>
+      )}
 
       {matchedArticle && matchedVariant && (
         <div style={{ marginTop: 8, fontSize: 12, color: palette.sage, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -22335,11 +22373,31 @@ function pilotCheckInvoice(inv) {
   return pb;
 }
 
-async function pilotScanWithFallback(sourceBlock, scanPrompt) {
+// Prix au kilo / litre / pièce très éloigné de l'habitude → quantité sans doute mal lue.
+function pilotUnusualPrices(inv, articles) {
+  if (!articles || !articles.length) return [];
+  let purchases = [];
+  try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
+  const out = [];
+  for (const it of inv.items || []) {
+    const label = it.raw_label || it.product_name || '';
+    const m = pilotFindByExactLabel(label, articles) || findArticleByLabel(label, articles);
+    const qty = Number(it.converted_qty) || 0, total = Number(it.total_ht) || 0;
+    if (!m || !(qty > 0) || !(total > 0)) continue;
+    const usual = usualPriceFor(m.article.id, purchases, null, m.variant && m.variant.id);
+    const price = total / qty;
+    // Relecture seulement si l'écart est flagrant (×2) ; en dessous, la ligne
+    // est juste signalée en orange dans la fiche facture.
+    if (usual > 0 && (price / usual > 2 || usual / price > 2)) out.push(`prix inhabituel : ${label} (${(total / qty).toFixed(2)} au lieu de ${usual.toFixed(2)})`);
+  }
+  return out;
+}
+
+async function pilotScanWithFallback(sourceBlock, scanPrompt, articles) {
   let first = null, problems = [];
   try {
     first = await pilotScanOnce(PILOT_FAST_MODEL, sourceBlock, scanPrompt);
-    problems = pilotCheckInvoice(first);
+    problems = pilotCheckInvoice(first).concat(pilotUnusualPrices(first, articles));
   } catch (e) {
     if (e instanceof PilotHardError) throw e;
     problems = [e.message];
@@ -22347,7 +22405,7 @@ async function pilotScanWithFallback(sourceBlock, scanPrompt) {
   if (!problems.length) return first;
   console.log('[Scan] relecture par Sonnet : ' + problems.join(' ; '));
   const second = await pilotScanOnce(PILOT_SAFE_MODEL, sourceBlock, scanPrompt);
-  const left = pilotCheckInvoice(second);
+  const left = pilotCheckInvoice(second).concat(pilotUnusualPrices(second, articles));
   mcToast.success(left.length
     ? 'Facture difficile : relue deux fois, vérifiez les lignes signalées'
     : 'Facture difficile : lecture vérifiée deux fois');

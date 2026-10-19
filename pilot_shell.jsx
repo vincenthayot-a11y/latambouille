@@ -418,11 +418,31 @@ function pilotCheckInvoice(inv) {
   return pb;
 }
 
-async function pilotScanWithFallback(sourceBlock, scanPrompt) {
+// Prix au kilo / litre / pièce très éloigné de l'habitude → quantité sans doute mal lue.
+function pilotUnusualPrices(inv, articles) {
+  if (!articles || !articles.length) return [];
+  let purchases = [];
+  try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
+  const out = [];
+  for (const it of inv.items || []) {
+    const label = it.raw_label || it.product_name || '';
+    const m = pilotFindByExactLabel(label, articles) || findArticleByLabel(label, articles);
+    const qty = Number(it.converted_qty) || 0, total = Number(it.total_ht) || 0;
+    if (!m || !(qty > 0) || !(total > 0)) continue;
+    const usual = usualPriceFor(m.article.id, purchases, null, m.variant && m.variant.id);
+    const price = total / qty;
+    // Relecture seulement si l'écart est flagrant (×2) ; en dessous, la ligne
+    // est juste signalée en orange dans la fiche facture.
+    if (usual > 0 && (price / usual > 2 || usual / price > 2)) out.push(`prix inhabituel : ${label} (${(total / qty).toFixed(2)} au lieu de ${usual.toFixed(2)})`);
+  }
+  return out;
+}
+
+async function pilotScanWithFallback(sourceBlock, scanPrompt, articles) {
   let first = null, problems = [];
   try {
     first = await pilotScanOnce(PILOT_FAST_MODEL, sourceBlock, scanPrompt);
-    problems = pilotCheckInvoice(first);
+    problems = pilotCheckInvoice(first).concat(pilotUnusualPrices(first, articles));
   } catch (e) {
     if (e instanceof PilotHardError) throw e;
     problems = [e.message];
@@ -430,7 +450,7 @@ async function pilotScanWithFallback(sourceBlock, scanPrompt) {
   if (!problems.length) return first;
   console.log('[Scan] relecture par Sonnet : ' + problems.join(' ; '));
   const second = await pilotScanOnce(PILOT_SAFE_MODEL, sourceBlock, scanPrompt);
-  const left = pilotCheckInvoice(second);
+  const left = pilotCheckInvoice(second).concat(pilotUnusualPrices(second, articles));
   mcToast.success(left.length
     ? 'Facture difficile : relue deux fois, vérifiez les lignes signalées'
     : 'Facture difficile : lecture vérifiée deux fois');
