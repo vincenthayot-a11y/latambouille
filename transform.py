@@ -389,6 +389,11 @@ rep("""            if (
                 ],
               };""")
 
+# ── P. Même libellé de facture = même article (même au sein d'un lot) ──
+rep("""        if (item.productName) {
+          const match = findArticleByLabel(item.productName, updatedArticles);""", """        if (item.productName) {
+          const match = pilotFindByExactLabel(item.label, updatedArticles) || findArticleByLabel(item.productName, updatedArticles);""")
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 

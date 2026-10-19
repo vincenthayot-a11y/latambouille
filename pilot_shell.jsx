@@ -508,3 +508,14 @@ function pilotMatchSupplier(name) {
   if (!window.__pilotSeenSuppliers.includes(result)) window.__pilotSeenSuppliers.push(result);
   return result;
 }
+
+// Libellé de facture identique (aux espaces/accents près) à un alias déjà connu.
+function pilotFindByExactLabel(label, articles) {
+  const norm = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  const k = norm(label);
+  if (k.length < 4) return null;
+  for (const article of articles) for (const variant of (article.variants || [])) {
+    if (norm(variant.name) === k || (variant.aliases || []).some((a) => norm(a.label) === k)) return { article, variant };
+  }
+  return null;
+}

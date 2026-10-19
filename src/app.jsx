@@ -11006,7 +11006,7 @@ function PurchasesView({ context }) {
 
         // Case 2: not linked yet, with a product name → match or create
         if (item.productName) {
-          const match = findArticleByLabel(item.productName, updatedArticles);
+          const match = pilotFindByExactLabel(item.label, updatedArticles) || findArticleByLabel(item.productName, updatedArticles);
 
           if (match) {
             // Auto-register alias on the matched variant
@@ -22348,6 +22348,17 @@ function pilotMatchSupplier(name) {
   const result = candidates[0] || name;
   if (!window.__pilotSeenSuppliers.includes(result)) window.__pilotSeenSuppliers.push(result);
   return result;
+}
+
+// Libellé de facture identique (aux espaces/accents près) à un alias déjà connu.
+function pilotFindByExactLabel(label, articles) {
+  const norm = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  const k = norm(label);
+  if (k.length < 4) return null;
+  for (const article of articles) for (const variant of (article.variants || [])) {
+    if (norm(variant.name) === k || (variant.aliases || []).some((a) => norm(a.label) === k)) return { article, variant };
+  }
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
