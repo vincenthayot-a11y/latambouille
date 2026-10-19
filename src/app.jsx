@@ -22296,6 +22296,7 @@ function pilotKnownSuppliers() {
   try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
   const counts = {};
   for (const p of purchases) { const s = (p.supplier || '').trim(); if (s) counts[s] = (counts[s] || 0) + 1; }
+  for (const s of (window.__pilotSeenSuppliers || [])) if (!counts[s]) counts[s] = 0.5;
   return counts;
 }
 
@@ -22304,12 +22305,18 @@ function pilotMatchSupplier(name) {
   if (!name) return name;
   const alias = pilotAliases()[pilotSupplierKey(name).join('')];
   if (alias) return alias;
+  // Fournisseurs lus pendant cette session mais pas encore enregistrés
+  // (scan par lot : la 2e facture SOPROGLACES doit reprendre le nom de la 1re).
+  window.__pilotSeenSuppliers = window.__pilotSeenSuppliers || [];
   let purchases = [];
   try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
   const counts = {};
   for (const p of purchases) { const s = (p.supplier || '').trim(); if (s) counts[s] = (counts[s] || 0) + 1; }
+  for (const s of window.__pilotSeenSuppliers) if (!counts[s]) counts[s] = 0.5;
   const candidates = Object.keys(counts).filter((s) => pilotSameSupplier(s, name)).sort((x, y) => counts[y] - counts[x]);
-  return candidates[0] || name;
+  const result = candidates[0] || name;
+  if (!window.__pilotSeenSuppliers.includes(result)) window.__pilotSeenSuppliers.push(result);
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
