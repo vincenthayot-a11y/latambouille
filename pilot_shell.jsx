@@ -354,7 +354,10 @@ function pilotSupplierHint() {
   const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 80);
   const base = "\n\nNOM DU FOURNISSEUR : donne le nom commercial seul, sans adresse, sans ville et sans forme juridique (SARL, SAS…)." +
     "\nCATÉGORIE : pour chaque ligne, ajoute un champ \"category\" choisi exactement dans cette liste : " +
-    pilotCategories().filter((c) => c !== 'À trier').map((c) => '« ' + c + ' »').join(', ') + ".";
+    pilotCategories().filter((c) => c !== 'À trier').map((c) => '« ' + c + ' »').join(', ') + "." +
+    "\nNATURE DE LA FACTURE : ajoute au premier niveau du JSON un champ \"invoice_type\" : " +
+    "\"marchandises\" si la facture concerne surtout des produits revendus ou cuisinés (aliments, boissons) ou des consommables de cuisine et de service (emballages, sacs, gants, produits d'entretien) ; " +
+    "\"autre\" pour tout le reste (carburant, garage, lavage auto, péage, électricité, téléphone, loyer, assurance, honoraires, réparation, travaux, vêtements, matériel, instruments, abonnements…).";
   const catalog = pilotCatalogHint();
   if (!names.length) return base + catalog;
   return base + catalog + "\nFournisseurs déjà enregistrés par ce restaurant : " + names.map((n) => '« ' + n + ' »').join(', ') +
@@ -518,4 +521,21 @@ function pilotFindByExactLabel(label, articles) {
     if (norm(variant.name) === k || (variant.aliases || []).some((a) => norm(a.label) === k)) return { article, variant };
   }
   return null;
+}
+
+// ─── Facture hors marchandises : avertissement dans la fiche facture ─────
+function PilotOtherInvoiceWarning({ onKeep, onCancel }) {
+  return (
+    <div style={{ padding: 14, background: palette.amber + '15', border: `1px solid ${palette.amber}55`, borderRadius: 8, marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>⚠ Ce n'est pas un achat de marchandises</div>
+      <div style={{ fontSize: 13, color: palette.inkSoft, marginBottom: 10 }}>
+        Carburant, garage, service, matériel… Si vous l'enregistrez, elle restera dans vos achats mais ses lignes
+        n'iront pas dans le catalogue et elle ne comptera pas dans le rapport.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button className="mc-btn mc-btn-ghost" style={{ fontSize: 12 }} onClick={onCancel}>Ne pas l'enregistrer</button>
+        <button className="mc-btn mc-btn-ghost" style={{ fontSize: 12 }} onClick={onKeep}>Si, ce sont des marchandises</button>
+      </div>
+    </div>
+  );
 }

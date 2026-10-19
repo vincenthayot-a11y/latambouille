@@ -4197,6 +4197,7 @@ async function scanInvoiceFile(file, articles) {
     date: parsed.date || new Date().toISOString().slice(0, 10),
     supplier: pilotMatchSupplier(parsed.supplier || ''),
     scannedSupplier: parsed.supplier || '',
+    kind: (parsed.invoice_type === 'autre' || parsed.kind === 'equipment' || parsed.kind === 'energy') ? 'other' : 'supply',
     invoiceNumber: parsed.invoice_number || '',
     total: parsed.total_ht || parsed.total_ttc || 0,
     items: mappedItems,
@@ -10898,7 +10899,9 @@ function PurchasesView({ context }) {
       const purchases = pilotPurchasesRef.current;
       let updatedArticles = [...articles];
 
-      const finalItems = data.items.map((item) => {
+      const finalItems = data.kind === 'other'
+        ? data.items.map((item) => ({ ...item, articleId: null, variantId: null }))
+        : data.items.map((item) => {
         // Case 1: already linked to an article AND existing variant
         if (item.articleId && item.variantId && item.variantId !== '__NEW__') {
           const ingIdx = updatedArticles.findIndex((i) => i.id === item.articleId);
@@ -11391,6 +11394,7 @@ function PurchaseModal({ initial, onSave, onClose, articles, fromScan, existingP
     items: initial.items || [],
     total: initial.total || 0,
     id: initial.id,
+    kind: initial.kind || 'supply',
   });
 
   const [forceSave, setForceSave] = useState(false);
@@ -11464,6 +11468,12 @@ function PurchaseModal({ initial, onSave, onClose, articles, fromScan, existingP
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: palette.wine + '10', color: palette.wine, borderRadius: 6, fontSize: 13, marginBottom: 20 }}>
             <Star size={14} /> Données extraites par IA — vérifiez les conversions et variantes
           </div>
+        )}
+
+        {form.kind === 'other' && (
+          <PilotOtherInvoiceWarning
+            onKeep={() => setForm({ ...form, kind: 'supply' })}
+            onCancel={onClose} />
         )}
 
         {duplicate && (
@@ -14089,7 +14099,7 @@ function BatchScanModal({ articles, existingPurchases, onSavePurchase, onClose }
             i.id === itemId
               ? {
                   ...i,
-                  status: dup ? 'duplicate' : 'success',
+                  status: dup ? 'duplicate' : (result.kind === 'other' ? 'other' : 'success'),
                   result,
                   duplicate: dup,
                   error: null,
@@ -14150,9 +14160,14 @@ function BatchScanModal({ articles, existingPurchases, onSavePurchase, onClose }
   const handleForceDuplicate = (itemId) => {
     setItems((prev) =>
       prev.map((i) =>
-        i.id === itemId ? { ...i, status: 'success', duplicate: null } : i
+        i.id === itemId ? { ...i, status: i.result?.kind === 'other' ? 'other' : 'success', duplicate: null } : i
       )
     );
+  };
+
+  // Hors marchandises : l'utilisateur la garde quand même (sans catalogue)
+  const handleKeepOther = (itemId) => {
+    setItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, status: 'success' } : i)));
   };
 
   // ─── Bulk save: commit all "success" items and remove them from the list ──
@@ -14181,12 +14196,13 @@ function BatchScanModal({ articles, existingPurchases, onSavePurchase, onClose }
     scanning: items.filter((i) => i.status === 'scanning').length,
     success: items.filter((i) => i.status === 'success').length,
     duplicate: items.filter((i) => i.status === 'duplicate').length,
+    other: items.filter((i) => i.status === 'other').length,
     error: items.filter((i) => i.status === 'error').length,
     saved: items.filter((i) => i.status === 'saved').length,
     ignored: items.filter((i) => i.status === 'ignored').length,
   };
 
-  const processedCount = stats.success + stats.duplicate + stats.error + stats.saved + stats.ignored;
+  const processedCount = stats.success + stats.duplicate + stats.other + stats.error + stats.saved + stats.ignored;
   const isDone = stats.pending === 0 && stats.scanning === 0;
   const progressPercent = stats.total > 0 ? Math.round((processedCount / stats.total) * 100) : 0;
 
@@ -14329,6 +14345,7 @@ function BatchScanModal({ articles, existingPurchases, onSavePurchase, onClose }
                   onIgnore={() => handleIgnore(item.id)}
                   onManualEdit={() => handleManualEdit(item.id)}
                   onForceDuplicate={() => handleForceDuplicate(item.id)}
+                  onKeepOther={() => handleKeepOther(item.id)}
                 />
               ))}
             </div>
@@ -14382,7 +14399,7 @@ function BatchScanModal({ articles, existingPurchases, onSavePurchase, onClose }
  * One row in the batch scan list. Shows the file's status and offers
  * context-sensitive actions (Modifier, Réessayer, Ignorer, etc.)
  */
-function BatchScanItem({ item, articles, onRetry, onIgnore, onManualEdit, onForceDuplicate }) {
+function BatchScanItem({ item, articles, onRetry, onIgnore, onManualEdit, onForceDuplicate, onKeepOther }) {
   const { status, filename, result, duplicate, error } = item;
 
   // Visual config per status
@@ -14396,6 +14413,8 @@ function BatchScanItem({ item, articles, onRetry, onIgnore, onManualEdit, onForc
         return { icon: '✓', color: palette.sage, bg: palette.sage + '08', label: 'Prête' };
       case 'duplicate':
         return { icon: '⚠', color: palette.amber, bg: palette.amber + '15', label: 'Doublon' };
+      case 'other':
+        return { icon: '⚠', color: palette.amber, bg: palette.amber + '15', label: 'Hors marchandises' };
       case 'error':
         return { icon: '✗', color: palette.wine, bg: palette.wine + '08', label: 'Erreur' };
       case 'saved':
@@ -14438,6 +14457,16 @@ function BatchScanItem({ item, articles, onRetry, onIgnore, onManualEdit, onForc
               <strong>{formatEuro(result.total)}</strong> · {result.items.length} ligne{result.items.length > 1 ? 's' : ''}
             </span>
           )}
+          {status === 'other' && result && (
+            <span style={{ fontSize: 12, color: palette.inkSoft }}>
+              {result.supplier || '?'} · {formatShortDate(result.date, { withYear: true })} · {formatEuro(result.total)}
+              {' — '}
+              <em>pas un achat de marchandises</em>
+            </span>
+          )}
+          {status === 'success' && result && result.kind === 'other' && (
+            <span className="mc-pill" style={{ fontSize: 11 }}>hors catalogue</span>
+          )}
           {status === 'duplicate' && result && duplicate && (
             <span style={{ fontSize: 12, color: palette.inkSoft }}>
               {result.supplier} · {formatShortDate(result.date, { withYear: true })} · {formatEuro(result.total)}
@@ -14466,6 +14495,32 @@ function BatchScanItem({ item, articles, onRetry, onIgnore, onManualEdit, onForc
           >
             <Edit3 size={12} /> Modifier
           </button>
+        )}
+        {status === 'other' && (
+          <>
+            <button
+              className="mc-btn mc-btn-ghost"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={onManualEdit}
+            >
+              <Edit3 size={12} /> Voir
+            </button>
+            <button
+              className="mc-btn mc-btn-amber"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={onKeepOther}
+              title="Enregistrée dans les achats, sans créer d'articles au catalogue"
+            >
+              Enregistrer quand même
+            </button>
+            <button
+              className="mc-btn mc-btn-danger"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={onIgnore}
+            >
+              Ignorer
+            </button>
+          </>
         )}
         {status === 'duplicate' && (
           <>
@@ -22195,7 +22250,10 @@ function pilotSupplierHint() {
   const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 80);
   const base = "\n\nNOM DU FOURNISSEUR : donne le nom commercial seul, sans adresse, sans ville et sans forme juridique (SARL, SAS…)." +
     "\nCATÉGORIE : pour chaque ligne, ajoute un champ \"category\" choisi exactement dans cette liste : " +
-    pilotCategories().filter((c) => c !== 'À trier').map((c) => '« ' + c + ' »').join(', ') + ".";
+    pilotCategories().filter((c) => c !== 'À trier').map((c) => '« ' + c + ' »').join(', ') + "." +
+    "\nNATURE DE LA FACTURE : ajoute au premier niveau du JSON un champ \"invoice_type\" : " +
+    "\"marchandises\" si la facture concerne surtout des produits revendus ou cuisinés (aliments, boissons) ou des consommables de cuisine et de service (emballages, sacs, gants, produits d'entretien) ; " +
+    "\"autre\" pour tout le reste (carburant, garage, lavage auto, péage, électricité, téléphone, loyer, assurance, honoraires, réparation, travaux, vêtements, matériel, instruments, abonnements…).";
   const catalog = pilotCatalogHint();
   if (!names.length) return base + catalog;
   return base + catalog + "\nFournisseurs déjà enregistrés par ce restaurant : " + names.map((n) => '« ' + n + ' »').join(', ') +
@@ -22361,6 +22419,23 @@ function pilotFindByExactLabel(label, articles) {
   return null;
 }
 
+// ─── Facture hors marchandises : avertissement dans la fiche facture ─────
+function PilotOtherInvoiceWarning({ onKeep, onCancel }) {
+  return (
+    <div style={{ padding: 14, background: palette.amber + '15', border: `1px solid ${palette.amber}55`, borderRadius: 8, marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>⚠ Ce n'est pas un achat de marchandises</div>
+      <div style={{ fontSize: 13, color: palette.inkSoft, marginBottom: 10 }}>
+        Carburant, garage, service, matériel… Si vous l'enregistrez, elle restera dans vos achats mais ses lignes
+        n'iront pas dans le catalogue et elle ne comptera pas dans le rapport.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button className="mc-btn mc-btn-ghost" style={{ fontSize: 12 }} onClick={onCancel}>Ne pas l'enregistrer</button>
+        <button className="mc-btn mc-btn-ghost" style={{ fontSize: 12 }} onClick={onKeep}>Si, ce sont des marchandises</button>
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //   PILOTAGE (version test) : Rapport + Économies
 // ═══════════════════════════════════════════════════════════════════════════
@@ -22371,8 +22446,10 @@ function pilotIsoDay(d) {
 }
 
 // Période courante + période précédente de même durée.
-function usePilotPeriods(purchases, dateFrom, dateTo) {
+function usePilotPeriods(allPurchases, dateFrom, dateTo) {
   return useMemo(() => {
+    // Les factures hors marchandises (carburant, garage…) restent à part.
+    const purchases = allPurchases.filter((p) => p.kind !== 'other');
     const today = pilotIsoDay(new Date());
     const dates = purchases.map((p) => p.date).filter(Boolean).sort();
     const from = dateFrom || dates[0] || today;
@@ -22391,8 +22468,9 @@ function usePilotPeriods(purchases, dateFrom, dateTo) {
       // Pas de comparaison si la période précédente est quasi vide (début d'utilisation).
       if (prev.length < Math.max(2, cur.length * 0.3)) prev = [];
     }
-    return { from, to, cur, prev, prevFrom, prevTo };
-  }, [purchases, dateFrom, dateTo]);
+    const curOther = allPurchases.filter((p) => p.kind === 'other' && inCur(p.date));
+    return { from, to, cur, prev, prevFrom, prevTo, curOther };
+  }, [allPurchases, dateFrom, dateTo]);
 }
 
 // Prix moyen pondéré par article sur une liste de factures.
@@ -22553,7 +22631,8 @@ const pilotEmpty = (text) => (
 function PilotReportView({ context }) {
   const { purchases, articles, dateFrom, dateTo, setActiveTab } = context;
   const isMobile = useIsMobile(720);
-  const { from, to, cur, prev } = usePilotPeriods(purchases, dateFrom, dateTo);
+  const { from, to, cur, prev, curOther } = usePilotPeriods(purchases, dateFrom, dateTo);
+  const otherTotal = curOther.reduce((s, p) => s + (p.total || 0), 0);
   const [showDetail, setShowDetail] = useState(false);
 
   const total = cur.reduce((s, p) => s + (p.total || 0), 0);
@@ -22621,6 +22700,12 @@ function PilotReportView({ context }) {
         <PilotStat label="Économies possibles" value={formatEuro(savingTotal)} sub="voir le détail →" subColor={palette.sage}
           onClick={() => setActiveTab && setActiveTab('savings')} />
       </div>
+
+      {otherTotal > 0 && (
+        <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: -8 }}>
+          Hors marchandises (non compté ci-dessus) : {formatEuro(otherTotal)} sur {curOther.length} facture{curOther.length > 1 ? 's' : ''}.
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
         <PilotSection title="Par fournisseur">

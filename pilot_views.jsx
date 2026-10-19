@@ -8,8 +8,10 @@ function pilotIsoDay(d) {
 }
 
 // Période courante + période précédente de même durée.
-function usePilotPeriods(purchases, dateFrom, dateTo) {
+function usePilotPeriods(allPurchases, dateFrom, dateTo) {
   return useMemo(() => {
+    // Les factures hors marchandises (carburant, garage…) restent à part.
+    const purchases = allPurchases.filter((p) => p.kind !== 'other');
     const today = pilotIsoDay(new Date());
     const dates = purchases.map((p) => p.date).filter(Boolean).sort();
     const from = dateFrom || dates[0] || today;
@@ -28,8 +30,9 @@ function usePilotPeriods(purchases, dateFrom, dateTo) {
       // Pas de comparaison si la période précédente est quasi vide (début d'utilisation).
       if (prev.length < Math.max(2, cur.length * 0.3)) prev = [];
     }
-    return { from, to, cur, prev, prevFrom, prevTo };
-  }, [purchases, dateFrom, dateTo]);
+    const curOther = allPurchases.filter((p) => p.kind === 'other' && inCur(p.date));
+    return { from, to, cur, prev, prevFrom, prevTo, curOther };
+  }, [allPurchases, dateFrom, dateTo]);
 }
 
 // Prix moyen pondéré par article sur une liste de factures.
@@ -190,7 +193,8 @@ const pilotEmpty = (text) => (
 function PilotReportView({ context }) {
   const { purchases, articles, dateFrom, dateTo, setActiveTab } = context;
   const isMobile = useIsMobile(720);
-  const { from, to, cur, prev } = usePilotPeriods(purchases, dateFrom, dateTo);
+  const { from, to, cur, prev, curOther } = usePilotPeriods(purchases, dateFrom, dateTo);
+  const otherTotal = curOther.reduce((s, p) => s + (p.total || 0), 0);
   const [showDetail, setShowDetail] = useState(false);
 
   const total = cur.reduce((s, p) => s + (p.total || 0), 0);
@@ -258,6 +262,12 @@ function PilotReportView({ context }) {
         <PilotStat label="Économies possibles" value={formatEuro(savingTotal)} sub="voir le détail →" subColor={palette.sage}
           onClick={() => setActiveTab && setActiveTab('savings')} />
       </div>
+
+      {otherTotal > 0 && (
+        <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: -8 }}>
+          Hors marchandises (non compté ci-dessus) : {formatEuro(otherTotal)} sur {curOther.length} facture{curOther.length > 1 ? 's' : ''}.
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
         <PilotSection title="Par fournisseur">

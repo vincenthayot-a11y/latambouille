@@ -394,6 +394,115 @@ rep("""        if (item.productName) {
           const match = findArticleByLabel(item.productName, updatedArticles);""", """        if (item.productName) {
           const match = pilotFindByExactLabel(item.label, updatedArticles) || findArticleByLabel(item.productName, updatedArticles);""")
 
+
+# ── Q. Factures hors marchandises (carburant, garage, services…) ──────────
+# Signalées à l'utilisateur ; si elles sont gardées, leurs lignes ne créent
+# pas d'articles au catalogue et elles sortent du rapport des achats.
+rep("""    scannedSupplier: parsed.supplier || '',
+    invoiceNumber: parsed.invoice_number || '',""", """    scannedSupplier: parsed.supplier || '',
+    kind: (parsed.invoice_type === 'autre' || parsed.kind === 'equipment' || parsed.kind === 'energy') ? 'other' : 'supply',
+    invoiceNumber: parsed.invoice_number || '',""")
+rep("""      const finalItems = data.items.map((item) => {
+        // Case 1: already linked to an article AND existing variant""", """      const finalItems = data.kind === 'other'
+        ? data.items.map((item) => ({ ...item, articleId: null, variantId: null }))
+        : data.items.map((item) => {
+        // Case 1: already linked to an article AND existing variant""")
+rep("""    total: initial.total || 0,
+    id: initial.id,
+  });
+
+  const [forceSave, setForceSave] = useState(false);""", """    total: initial.total || 0,
+    id: initial.id,
+    kind: initial.kind || 'supply',
+  });
+
+  const [forceSave, setForceSave] = useState(false);""")
+rep("""        {duplicate && (
+          <DuplicateWarning duplicate={duplicate} forceSave={forceSave} onForceSave={() => setForceSave(true)} />""", """        {form.kind === 'other' && (
+          <PilotOtherInvoiceWarning
+            onKeep={() => setForm({ ...form, kind: 'supply' })}
+            onCancel={onClose} />
+        )}
+
+        {duplicate && (
+          <DuplicateWarning duplicate={duplicate} forceSave={forceSave} onForceSave={() => setForceSave(true)} />""")
+rep("""                  status: dup ? 'duplicate' : 'success',""", """                  status: dup ? 'duplicate' : (result.kind === 'other' ? 'other' : 'success'),""")
+rep("""        i.id === itemId ? { ...i, status: 'success', duplicate: null } : i
+      )
+    );
+  };""", """        i.id === itemId ? { ...i, status: i.result?.kind === 'other' ? 'other' : 'success', duplicate: null } : i
+      )
+    );
+  };
+
+  // Hors marchandises : l'utilisateur la garde quand même (sans catalogue)
+  const handleKeepOther = (itemId) => {
+    setItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, status: 'success' } : i)));
+  };""")
+rep("""    duplicate: items.filter((i) => i.status === 'duplicate').length,""", """    duplicate: items.filter((i) => i.status === 'duplicate').length,
+    other: items.filter((i) => i.status === 'other').length,""")
+rep("""  const processedCount = stats.success + stats.duplicate + stats.error""", """  const processedCount = stats.success + stats.duplicate + stats.other + stats.error""")
+rep("""                  onForceDuplicate={() => handleForceDuplicate(item.id)}""", """                  onForceDuplicate={() => handleForceDuplicate(item.id)}
+                  onKeepOther={() => handleKeepOther(item.id)}""")
+rep("""function BatchScanItem({ item, articles, onRetry, onIgnore, onManualEdit, onForceDuplicate }) {""", """function BatchScanItem({ item, articles, onRetry, onIgnore, onManualEdit, onForceDuplicate, onKeepOther }) {""")
+rep("""        return { icon: '⚠', color: palette.amber, bg: palette.amber + '15', label: 'Doublon' };""", """        return { icon: '⚠', color: palette.amber, bg: palette.amber + '15', label: 'Doublon' };
+      case 'other':
+        return { icon: '⚠', color: palette.amber, bg: palette.amber + '15', label: 'Hors marchandises' };""")
+rep("""          {status === 'duplicate' && result && duplicate && (""", """          {status === 'other' && result && (
+            <span style={{ fontSize: 12, color: palette.inkSoft }}>
+              {result.supplier || '?'} · {formatShortDate(result.date, { withYear: true })} · {formatEuro(result.total)}
+              {' — '}
+              <em>pas un achat de marchandises</em>
+            </span>
+          )}
+          {status === 'success' && result && result.kind === 'other' && (
+            <span className="mc-pill" style={{ fontSize: 11 }}>hors catalogue</span>
+          )}
+          {status === 'duplicate' && result && duplicate && (""")
+rep("""        {status === 'duplicate' && (
+          <>
+            <button
+              className="mc-btn mc-btn-ghost"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={onManualEdit}
+            >
+              <Edit3 size={12} /> Voir
+            </button>""", """        {status === 'other' && (
+          <>
+            <button
+              className="mc-btn mc-btn-ghost"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={onManualEdit}
+            >
+              <Edit3 size={12} /> Voir
+            </button>
+            <button
+              className="mc-btn mc-btn-amber"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={onKeepOther}
+              title="Enregistrée dans les achats, sans créer d'articles au catalogue"
+            >
+              Enregistrer quand même
+            </button>
+            <button
+              className="mc-btn mc-btn-danger"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={onIgnore}
+            >
+              Ignorer
+            </button>
+          </>
+        )}
+        {status === 'duplicate' && (
+          <>
+            <button
+              className="mc-btn mc-btn-ghost"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={onManualEdit}
+            >
+              <Edit3 size={12} /> Voir
+            </button>""")
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 
