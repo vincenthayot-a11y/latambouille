@@ -513,15 +513,18 @@ function pilotInvoiceAnomalies(purchases, articles, checked = []) {
 }
 
 function pilotAlertGroups(purchases, articles, alertsIndex, alertSettings) {
-  const anomalies = pilotInvoiceAnomalies(purchases, articles, alertSettings?.checkedAnomalies || []);
-  const trendIds = new Set(anomalies.map((a) => a.article.id));
+  const checks = quantityChecks(purchases, articles, alertSettings?.checkedAnomalies || []);
+  const checkIds = new Set(checks.map((c) => c.id));
+  // Une quantité mal lue n'est pas une hausse de prix : elle n'apparaît qu'une fois.
+  const anomalies = pilotInvoiceAnomalies(purchases, articles, alertSettings?.checkedAnomalies || []).filter((a) => !checkIds.has(a.id));
+  const trendIds = new Set([...anomalies, ...checks].map((a) => a.article.id));
   const trends = alertsIndex.filter((a) => a.type === ALERT_TYPES.PRICE_TREND && !trendIds.has(a.article.id));
   // Stock : seulement avec un inventaire ou un seuil saisi à la main
   // (une estimation à partir des seuls achats donne « 0 » partout).
   const stock = alertsIndex.filter((a) => (a.type === ALERT_TYPES.STOCK_LOW || a.type === ALERT_TYPES.STOCK_EMPTY) &&
     (a.thresholdSource === 'manual' || (!a.estimatedFromPurchases && a.thresholdSource !== 'purchase_history' && a.type !== ALERT_TYPES.STOCK_EMPTY)));
   const gaps = alertsIndex.filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP);
-  return { anomalies, trends, stock, gaps, count: anomalies.length + trends.length + stock.length };
+  return { checks, anomalies, trends, stock, gaps, count: checks.length + anomalies.length + trends.length + stock.length };
 }
 
 function PilotAlertsView({ context }) {
@@ -556,8 +559,11 @@ function PilotAlertsView({ context }) {
         </div>
       )}
 
+      <QuantityChecksSection purchases={purchases} articles={articles} alertSettings={alertSettings}
+        setAlertSettings={setAlertSettings} setActiveTab={setActiveTab} />
+
       {g.anomalies.length > 0 && (
-        <PilotSection title={`À vérifier sur vos factures (${g.anomalies.length})`}
+        <PilotSection title={`Prix anormaux sur vos factures (${g.anomalies.length})`}
           sub={`Lignes facturées au moins ${PILOT_ANOMALY_PCT} % plus cher que ce que vous payez d'habitude. Erreur du fournisseur ou vraie hausse : vérifiez avant de payer.`}>
           {anomalies.map((a, i) => (
             <div key={a.id} style={rowStyle(i)}>

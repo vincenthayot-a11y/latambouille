@@ -512,6 +512,10 @@ s = fix_matching.patch(s)
 import fix_price
 s = fix_price.patch(s)
 
+# ── T. Alertes : quantités à vérifier ──────────────────────────────────
+import fix_qtychecks
+s = fix_qtychecks.patch(s)
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 
