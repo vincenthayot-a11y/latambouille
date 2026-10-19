@@ -327,11 +327,23 @@ const PILOT_SAFE_MODEL = 'claude-sonnet-5-5';
 
 class PilotHardError extends Error {}
 
+// Donne à l'IA la liste des fournisseurs déjà enregistrés, pour qu'elle réutilise
+// le même nom (utile surtout pour les factures manuscrites, lues différemment à chaque fois).
+function pilotSupplierHint() {
+  const counts = pilotKnownSuppliers();
+  const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 80);
+  const base = "\n\nNOM DU FOURNISSEUR : donne le nom commercial seul, sans adresse, sans ville et sans forme juridique (SARL, SAS…).";
+  if (!names.length) return base;
+  return base + "\nFournisseurs déjà enregistrés par ce restaurant : " + names.map((n) => '« ' + n + ' »').join(', ') +
+    ".\nSi cette facture vient manifestement de l'un d'eux (même nom malgré une écriture ou une orthographe différente, même adresse), " +
+    "mets exactement ce nom dans \"supplier\". En cas de doute, garde le nom lu sur la facture.";
+}
+
 async function pilotScanOnce(model, sourceBlock, scanPrompt) {
   const response = await fetch('/api/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-access-code': pilotGetCode() },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt }] }] }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt + pilotSupplierHint() }] }] }),
   });
   if (!response.ok) {
     const errText = await response.text();
