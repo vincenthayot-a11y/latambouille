@@ -374,7 +374,7 @@ function pilotCheckInvoice(inv) {
     // 3. Un volume ou un poids dans le libellé doit donner des L ou des kg
     const unit = String(it.master_unit || '').toLowerCase();
     // (« SL » = « 5L » mal lu, erreur fréquente sur les photos)
-    const consumable = /\b(SAC|SACS|GOBELET|GANT|GANTS|BARQUETTE|FILM|ALU|ALUMINIUM|SERVIETTE|PAILLE|TABLIER|POUBELLE|ASSIETTE|COUVERCLE|POT\s+CARTON|BOITE\s+PIZZA|ESSUIE|PAPIER|DETERGENT|LESSIVE|JAVEL|LIQUIDE\s+VAISSELLE)\b/i.test(label);
+    const consumable = /\b(SACS? POUBELLE|SACS? CONGEL\w*|GOBELETS?|GANTS?|BARQUETTE|FILM|ALU|ALUMINIUM|SERVIETTE|PAILLE|TABLIER|POUBELLE|ASSIETTE|COUVERCLE|POT\s+CARTON|BOITE\s+PIZZA|ESSUIE|PAPIER|DETERGENT|LESSIVE|JAVEL|LIQUIDE\s+VAISSELLE)\b/i.test(label);
     if (!consumable && /(\d\s*(l|cl|ml|kg|g)|\bSL)\b/i.test(label) && /pi[eè]ce|^u$|unit/.test(unit)) pb.push(`unité à vérifier : ${label}`);
   }
   return pb;
