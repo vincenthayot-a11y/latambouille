@@ -4140,8 +4140,9 @@ async function scanInvoiceFile(file, articles) {
   const sourceBlock = await pilotFileToBlock(file);
 
   // Step 3: call API with the user's chosen model + API key
-  const chosenModel = await storageGet(STORAGE_KEYS.aiModel, DEFAULT_AI_MODEL);
   const scanPrompt = await storageGet(STORAGE_KEYS.scanPrompt, DEFAULT_SCAN_PROMPT);
+  const parsed = await pilotScanWithFallback(sourceBlock, scanPrompt);
+  /* ancienne lecture directe, conservée pour référence :
   const response = await fetch('/api/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-access-code': pilotGetCode() },
@@ -4171,10 +4172,7 @@ async function scanInvoiceFile(file, articles) {
   const rawText = textBlock ? textBlock.text : '';
   if (!rawText) throw new Error("Le modèle n'a renvoyé aucun texte");
 
-  const parsed = extractInvoiceJson(rawText);
-  if (!parsed.items || !Array.isArray(parsed.items)) {
-    throw new Error('Le JSON ne contient pas de tableau "items"');
-  }
+  */
 
   // Step 4: map each scanned line against existing articles/variants
   const mappedItems = parsed.items.map((item) => {
@@ -22146,6 +22144,85 @@ function PilotRoot() {
       </form>
     </div>
   );
+}
+
+// ─── Lecture des factures : Haiku d'abord, Sonnet en renfort ──────────────
+// Haiku est ~13× moins cher. Ses réponses passent des contrôles de cohérence ;
+// au moindre doute, la facture est relue par Sonnet.
+const PILOT_FAST_MODEL = 'claude-haiku-5-5';
+const PILOT_SAFE_MODEL = 'claude-sonnet-5-5';
+
+class PilotHardError extends Error {}
+
+async function pilotScanOnce(model, sourceBlock, scanPrompt) {
+  const response = await fetch('/api/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-access-code': pilotGetCode() },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: scanPrompt }] }] }),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    if (response.status === 401) throw new PilotHardError("Code d'accès refusé. Rechargez la page et saisissez votre code.");
+    if (response.status === 413) throw new PilotHardError('Fichier trop lourd. Essayez une photo plus légère ou un PDF de moins de 3 Mo.');
+    if (response.status === 429) throw new PilotHardError('Trop de lectures en peu de temps, réessayez dans une minute.');
+    let msg = errText.slice(0, 200);
+    try { msg = JSON.parse(errText).error || msg; } catch (e) {}
+    throw new Error('Lecture impossible (' + response.status + ') : ' + msg);
+  }
+  const data = await response.json();
+  if (data.stop_reason === 'max_tokens') throw new Error('Réponse incomplète');
+  const textBlock = data.content?.find((c) => c.type === 'text');
+  if (!textBlock || !textBlock.text) throw new Error("Le modèle n'a renvoyé aucun texte");
+  const parsed = extractInvoiceJson(textBlock.text);
+  if (!parsed.items || !Array.isArray(parsed.items)) throw new Error('Aucune ligne lue');
+  return parsed;
+}
+
+// Contrôles de cohérence. Renvoie la liste des problèmes (vide = lecture fiable).
+function pilotCheckInvoice(inv) {
+  const pb = [];
+  const items = inv.items || [];
+  const n = (x) => (typeof x === 'number' && isFinite(x) ? x : Number(String(x ?? '').replace(',', '.')) || 0);
+  if (!items.length) pb.push('aucune ligne');
+  if (!String(inv.supplier || '').trim()) pb.push('fournisseur manquant');
+  const d = inv.date ? new Date(inv.date + 'T12:00:00') : null;
+  const now = new Date();
+  if (!d || isNaN(d)) pb.push('date illisible');
+  else if (d - now > 7 * 86400000 || now - d > 3 * 365 * 86400000) pb.push('date improbable');
+  // 1. Somme des lignes = total HT
+  const sum = items.reduce((s, it) => s + n(it.total_ht), 0);
+  const ht = n(inv.total_ht);
+  if (ht > 0 && Math.abs(sum - ht) > Math.max(0.05, ht * 0.005)) pb.push(`lignes ${sum.toFixed(2)} ≠ total ${ht.toFixed(2)}`);
+  for (const it of items) {
+    const label = String(it.raw_label || it.product_name || '');
+    const total = n(it.total_ht), qty = n(it.converted_qty), price = n(it.price_per_master_unit);
+    // 2. Quantité × prix = montant de la ligne
+    if (qty > 0 && price > 0 && Math.abs(qty * price - total) > Math.max(0.1, Math.abs(total) * 0.03)) pb.push(`ligne incohérente : ${label}`);
+    // 3. Un volume ou un poids dans le libellé doit donner des L ou des kg
+    const unit = String(it.master_unit || '').toLowerCase();
+    // (« SL » = « 5L » mal lu, erreur fréquente sur les photos)
+    if (/(\d\s*(l|cl|ml|kg|g)|\bSL)\b/i.test(label) && /pi[eè]ce|^u$|unit/.test(unit)) pb.push(`unité à vérifier : ${label}`);
+  }
+  return pb;
+}
+
+async function pilotScanWithFallback(sourceBlock, scanPrompt) {
+  let first = null, problems = [];
+  try {
+    first = await pilotScanOnce(PILOT_FAST_MODEL, sourceBlock, scanPrompt);
+    problems = pilotCheckInvoice(first);
+  } catch (e) {
+    if (e instanceof PilotHardError) throw e;
+    problems = [e.message];
+  }
+  if (!problems.length) return first;
+  console.log('[Scan] relecture par Sonnet :', problems);
+  const second = await pilotScanOnce(PILOT_SAFE_MODEL, sourceBlock, scanPrompt);
+  const left = pilotCheckInvoice(second);
+  mcToast.success(left.length
+    ? 'Facture difficile : relue deux fois, vérifiez les lignes signalées'
+    : 'Facture difficile : lecture vérifiée deux fois');
+  return second;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

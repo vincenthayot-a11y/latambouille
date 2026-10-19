@@ -26,7 +26,7 @@ export default async function handler(req, res) {
     },
     body: JSON.stringify({
       model: MODELS.includes(body.model) ? body.model : DEFAULT_MODEL,
-      max_tokens: 8192,
+      max_tokens: 16000,
       messages: [{ role: 'user', content }],
     }),
   });

@@ -269,6 +269,20 @@ rep("""          alertsIndex={alertsIndex}
           collapsed={sidebarCollapsed}""", """          alertsIndex={pilotBadgeAlerts}
           collapsed={sidebarCollapsed}""")
 
+# ── J. Lecture en deux temps : Haiku, puis Sonnet si les contrôles échouent ──
+rep("""  const chosenModel = await storageGet(STORAGE_KEYS.aiModel, DEFAULT_AI_MODEL);
+  const scanPrompt = await storageGet(STORAGE_KEYS.scanPrompt, DEFAULT_SCAN_PROMPT);
+  const response = await fetch('/api/scan', {""", """  const scanPrompt = await storageGet(STORAGE_KEYS.scanPrompt, DEFAULT_SCAN_PROMPT);
+  const parsed = await pilotScanWithFallback(sourceBlock, scanPrompt);
+  /* ancienne lecture directe, conservée pour référence :
+  const response = await fetch('/api/scan', {""")
+rep("""  const parsed = extractInvoiceJson(rawText);
+  if (!parsed.items || !Array.isArray(parsed.items)) {
+    throw new Error('Le JSON ne contient pas de tableau "items"');
+  }
+""", """  */
+""")
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 
