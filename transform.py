@@ -283,6 +283,9 @@ rep("""  const parsed = extractInvoiceJson(rawText);
 """, """  */
 """)
 
+# ── K. Un fournisseur déjà connu garde son nom d'origine ───────────────
+rep("""    supplier: parsed.supplier || '',""", """    supplier: pilotMatchSupplier(parsed.supplier || ''),""")
+
 # ── G. Mount the pilot shell (access code + onboarding) ───────────────────
 rep("createRoot(_mc_rootEl).render(<LaTambouille />);", "createRoot(_mc_rootEl).render(<PilotRoot />);")
 

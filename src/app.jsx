@@ -4194,7 +4194,7 @@ async function scanInvoiceFile(file, articles) {
 
   return {
     date: parsed.date || new Date().toISOString().slice(0, 10),
-    supplier: parsed.supplier || '',
+    supplier: pilotMatchSupplier(parsed.supplier || ''),
     invoiceNumber: parsed.invoice_number || '',
     total: parsed.total_ht || parsed.total_ttc || 0,
     items: mappedItems,
@@ -22223,6 +22223,54 @@ async function pilotScanWithFallback(sourceBlock, scanPrompt) {
     ? 'Facture difficile : relue deux fois, vérifiez les lignes signalées'
     : 'Facture difficile : lecture vérifiée deux fois');
   return second;
+}
+
+// ─── Fournisseurs : rattacher un nom lu à un fournisseur déjà connu ───────
+// « SOFRIMA RESTAURATION » et « SOFRIMA », « CARAIBEPRICE » et « CARAIBE PRICE »,
+// « SN SOPROGLACES » et « SOPROGLACES » désignent le même fournisseur.
+const PILOT_LEGAL_WORDS = new Set(['SARL', 'SAS', 'SASU', 'SA', 'SN', 'SNC', 'EURL', 'SCI', 'STE', 'SOCIETE', 'ETS', 'ETABLISSEMENTS', 'ETABLISSEMENT', 'CIE', 'ET', 'LES', 'LE', 'LA', 'DE', 'DU', 'DES']);
+
+// Mots trop courants pour identifier un fournisseur à eux seuls.
+const PILOT_GENERIC_WORDS = new Set(['BOUCHERIE', 'EPICERIE', 'POISSONNERIE', 'BOULANGERIE', 'PATISSERIE', 'MARCHE', 'PRIMEUR', 'PRIMEURS',
+  'RESTAURATION', 'DISTRIBUTION', 'BOISSONS', 'MAREE', 'FERME', 'CAVE', 'SUPERMARCHE', 'CARREFOUR', 'LEADERPRICE', 'HYPER', 'SUPER', 'GROS']);
+
+function pilotSupplierKey(name) {
+  const words = String(name || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase()
+    .replace(/\./g, '').replace(/[^A-Z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean);
+  const kept = words.filter((w) => !PILOT_LEGAL_WORDS.has(w));
+  return (kept.length ? kept : words);
+}
+
+function pilotSameSupplier(a, b) {
+  const ta = pilotSupplierKey(a), tb = pilotSupplierKey(b);
+  if (!ta.length || !tb.length) return false;
+  const ca = ta.join(''), cb = tb.join('');
+  if (ca === cb) return true;                                   // CARAIBEPRICE = CARAIBE PRICE
+  const [short, long] = ca.length <= cb.length ? [ca, cb] : [cb, ca];
+  if (short.length >= 5 && long.startsWith(short) && !PILOT_GENERIC_WORDS.has(short)) return true;  // SOFRIMA ⊂ SOFRIMA RESTAURATION
+  // Petite faute de lecture sur un nom long (1 lettre sur 8 ou plus)
+  if (Math.min(ca.length, cb.length) >= 8 && pilotEditDistance(ca, cb) <= 1) return true;
+  return false;
+}
+
+function pilotEditDistance(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 99;
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return dp[a.length][b.length];
+}
+
+// Renvoie le nom du fournisseur déjà enregistré (le plus utilisé) s'il correspond.
+function pilotMatchSupplier(name) {
+  if (!name) return name;
+  let purchases = [];
+  try { purchases = JSON.parse(localStorage.getItem('mc5:purchases') || '[]'); } catch (e) {}
+  const counts = {};
+  for (const p of purchases) { const s = (p.supplier || '').trim(); if (s) counts[s] = (counts[s] || 0) + 1; }
+  const candidates = Object.keys(counts).filter((s) => pilotSameSupplier(s, name)).sort((x, y) => counts[y] - counts[x]);
+  return candidates[0] || name;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
