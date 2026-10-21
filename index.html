@@ -16993,7 +16993,12 @@ async function readClyoSalesPdf(file) {
   return { ...report, fileName: file.name };
 }
 
+// Clé exacte (insensible à la casse/accents) : « Colombo de Poulet » (menu groupe)
+// et « COLOMBO DE POULET. » (à la carte) doivent rester deux lignes distinctes.
 function clyoKey(name) {
+  return normalizeText(name);
+}
+function clyoLooseKey(name) {
   return normalizeText(name).replace(/[.\s]+$/, '');
 }
 
@@ -17004,9 +17009,10 @@ function clyoDefaultTarget(name, recipes, menus) {
   if (r) return 'r:' + r.id;
   const m = menus.find((x) => (x.clyoNames || []).some((n) => clyoKey(n) === k));
   if (m) return 'm:' + m.id;
-  const r2 = recipes.find((x) => !x.isAssortmentBase && clyoKey(x.name) === k);
+  const lk = clyoLooseKey(name);
+  const r2 = recipes.find((x) => !x.isAssortmentBase && clyoLooseKey(x.name) === lk);
   if (r2) return 'r:' + r2.id;
-  const m2 = menus.find((x) => clyoKey(x.name) === k);
+  const m2 = menus.find((x) => clyoLooseKey(x.name) === lk);
   if (m2) return 'm:' + m2.id;
   return '';
 }
