@@ -7362,7 +7362,7 @@ function DashboardView({ context }) {
         gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
         gap: isMobile ? 10 : 16,
       }}>
-        <KpiCard label="Chiffre d'affaires HT" value={formatEuro(stats.totalRevenue)} sub={`${Math.round(stats.dishesSold)} plats vendus`} accentColor={palette.ink} />
+        <KpiCard label="Chiffre d'affaires HT" value={formatEuro(stats.totalRevenue)} sub={`${Math.round(stats.dishesSold).toLocaleString('fr-FR')} portions vendues (plats, entrées, desserts, boissons)`} accentColor={palette.ink} />
         <KpiCard label="Achats alimentaires" value={formatEuro(stats.purchasesFood)} sub={`Réel · ${stats.purchasesCount} facture${stats.purchasesCount > 1 ? 's' : ''} sur la période des ventes`} />
         <KpiCard label="Marge brute" value={formatEuro(stats.totalRevenue - stats.purchasesFood)} sub={stats.totalRevenue > 0 ? `${formatPercent(1 - fc)} du CA · CA − achats alimentaires` : '—'} accentColor={palette.sage} />
         <KpiCard label="Coût matière théorique" value={formatEuro(stats.totalFoodCost)} sub={`Fiches recettes × ventes · écart ${formatEuro(stats.purchasesFood - stats.totalFoodCost)}`} />
@@ -17335,7 +17335,7 @@ function SalesView({ context }) {
       row.qty += s.qty || 0; row.revenue += s.revenue || 0;
       if (s.menuId) { row.menuQty += s.qty || 0; row.menuRevenue += s.revenue || 0; row.menus.add(menuName(s.menuId)); }
     }
-    const rows = Object.values(map).map((r) => ({ ...r, menus: [...r.menus].join(', ') }));
+    const rows = Object.values(map).map((r) => ({ ...r, menus: r.menus.size > 2 ? `dans ${r.menus.size} menus` : [...r.menus].join(', ') }));
     const total = rows.reduce((acc, r) => ({ qty: acc.qty + r.qty, revenue: acc.revenue + r.revenue, menuRevenue: acc.menuRevenue + r.menuRevenue }), { qty: 0, revenue: 0, menuRevenue: 0 });
     return { rows, total };
   }, [sales, recipes, menus, monthFilter]);
@@ -17361,7 +17361,7 @@ function SalesView({ context }) {
     </th>
   );
   const num = { textAlign: 'right', fontFamily: 'Fraunces, serif', whiteSpace: 'nowrap' };
-  const fmtQty = (q) => (Math.round(q * 10) / 10).toLocaleString('fr-FR');
+  const fmtQty = (q) => Math.round(q).toLocaleString('fr-FR');
   const grandRevenue = months.reduce((a, m) => a + m.revenue, 0);
 
   return (
@@ -17427,7 +17427,7 @@ function SalesView({ context }) {
                 <tr>
                   <th className="mc-th">Mois</th>
                   <th className="mc-th">Période couverte</th>
-                  <th className="mc-th" style={{ textAlign: 'right' }}>Plats</th>
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Portions</th>
                   <th className="mc-th" style={{ textAlign: 'right' }}>CA HT</th>
                   <th className="mc-th" style={{ textAlign: 'right' }}>Part</th>
                 </tr>
