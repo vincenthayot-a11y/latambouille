@@ -18056,8 +18056,9 @@ function AnalyticsView({ context }) {
   const [simFreePrice, setSimFreePrice] = useState('');
   const simRef = useRef(null);
   useEffect(() => {
-    if (!simArticleId && simOptions.length > 0) setSimArticleId(simOptions[0].id);
-  }, [simOptions, simArticleId]);
+    // Par défaut : l'article où le choix du fournisseur pèse le plus
+    if (!simArticleId && simOptions.length > 0) setSimArticleId((supplierTable.rows[0] || simOptions[0]).id);
+  }, [simOptions, simArticleId, supplierTable]);
   const simArticle = articles.find((a) => a.id === simArticleId) || null;
   const simAgg = simArticleId ? windowAgg[simArticleId] : null;
   const simSuppliers = useMemo(() => simAgg
