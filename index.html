@@ -622,6 +622,26 @@ function parseLocalDate(dateString) {
   return isNaN(d) ? new Date(NaN) : d;
 }
 
+/**
+ * Une vente CLYO couvre un segment mensuel [date, dateTo]. Elle est comptée
+ * dans une période dès qu'elle la chevauche (sinon « 30 derniers jours »
+ * ignorerait un mois entier dont le 1er est hors fenêtre). Les ventes
+ * journalières (sans dateTo) se comportent comme avant.
+ */
+function saleInPeriod(s, dateFrom, dateTo) {
+  if (dateFrom && (s.dateTo || s.date) < dateFrom) return false;
+  if (dateTo && s.date > dateTo) return false;
+  return true;
+}
+
+/** "2026-09" ou "2026-09-01" → "sept. 2026" (ou "septembre 2026" avec long). */
+function formatMonthLabel(ym, { long = false } = {}) {
+  const [y, m] = String(ym).split('-');
+  const d = new Date(Number(y), Number(m) - 1, 1);
+  const s = d.toLocaleDateString('fr-FR', { month: long ? 'long' : 'short', year: 'numeric' });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function detectDuplicate(candidate, existingPurchases) {
   if (!candidate.supplier) return null;
 
@@ -6796,8 +6816,7 @@ export default function LaTambouille() {
     let totalRevenue = 0;
     let totalCost = 0;
     for (const s of sales) {
-      if (dateFrom && s.date < dateFrom) continue;
-      if (dateTo && s.date > dateTo) continue;
+      if (!saleInPeriod(s, dateFrom, dateTo)) continue;
       totalRevenue += (s.revenue || 0);
       totalCost += (recipeCostMap[s.recipeId] || 0) * (s.qty || 0);
     }
@@ -7186,14 +7205,19 @@ function DashboardView({ context }) {
   }, [articles]);
 
   const stats = useMemo(() => {
-    const filteredSales = sales.filter(
-      (s) => (!dateFrom || s.date >= dateFrom) && (!dateTo || s.date <= dateTo)
-    );
+    const filteredSales = sales.filter((s) => saleInPeriod(s, dateFrom, dateTo));
     const totalRevenue = filteredSales.reduce((sum, s) => sum + s.revenue, 0);
     const totalFoodCost = filteredSales.reduce((sum, s) => {
       const cost = recipeCostMap[s.recipeId] || 0;
       return sum + cost * s.qty;
     }, 0);
+    // Période réellement couverte par les ventes (segments mensuels CLYO entiers)
+    let salesFrom = null, salesTo = null;
+    for (const s of filteredSales) {
+      if (!salesFrom || s.date < salesFrom) salesFrom = s.date;
+      const end = s.dateTo || s.date;
+      if (!salesTo || end > salesTo) salesTo = end;
+    }
     const filteredPurchases = purchases.filter(
       (p) => (!dateFrom || p.date >= dateFrom) && (!dateTo || p.date <= dateTo)
     );
@@ -7213,10 +7237,11 @@ function DashboardView({ context }) {
     // Energy: total TTC across all energy invoices in the same period filter.
     // We use TTC because that's the real out-of-pocket cost for the restaurant
     // (energy taxes are not recoverable like product VAT on most contracts).
-    let energyTotal = 0;
+    let energyTotal = 0, energyCount = 0;
     for (const e of (energy || [])) {
       if ((!dateFrom || (e.date || '') >= dateFrom) && (!dateTo || (e.date || '') <= dateTo)) {
         energyTotal += e.totalTTC || e.totalHT || 0;
+        energyCount++;
       }
     }
 
@@ -7256,6 +7281,11 @@ function DashboardView({ context }) {
       totalRevenue,
       totalFoodCost,
       foodCostRatio: totalRevenue > 0 ? totalFoodCost / totalRevenue : 0,
+      grossMargin: totalRevenue - totalFoodCost,
+      salesFrom,
+      salesTo,
+      purchasesCount: filteredPurchases.length,
+      energyCount,
       totalPurchases: filteredPurchases.reduce((sum, p) => sum + p.total, 0),
       purchasesFood,
       purchasesConsumable,
@@ -7269,205 +7299,165 @@ function DashboardView({ context }) {
     };
   }, [sales, purchases, energy, recipeCostMap, dateFrom, dateTo, productTypeById, equipmentPurchases, assetMaintenance, assetInterventions]);
 
-  const dailyActivity = useMemo(() => {
+  // Les ventes CLYO sont mensuelles : on agrège par mois civil.
+  const monthlyActivity = useMemo(() => {
     const map = {};
     sales
-      .filter((s) => (!dateFrom || s.date >= dateFrom) && (!dateTo || s.date <= dateTo))
+      .filter((s) => saleInPeriod(s, dateFrom, dateTo))
       .forEach((s) => {
-        if (!map[s.date]) map[s.date] = { date: s.date, revenue: 0, cost: 0 };
+        const ym = s.date.slice(0, 7);
+        if (!map[ym]) map[ym] = { ym, revenue: 0, cost: 0 };
         const cost = recipeCostMap[s.recipeId] || 0;
-        map[s.date].revenue += s.revenue;
-        map[s.date].cost += cost * s.qty;
+        map[ym].revenue += s.revenue;
+        map[ym].cost += cost * s.qty;
       });
     return Object.values(map)
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map((d) => ({ ...d, label: formatShortDate(d.date), margin: d.revenue - d.cost }));
+      .sort((a, b) => a.ym.localeCompare(b.ym))
+      .map((d) => ({ ...d, label: formatMonthLabel(d.ym), margin: d.revenue - d.cost, ratio: d.revenue > 0 ? d.cost / d.revenue : 0 }));
   }, [sales, recipeCostMap, dateFrom, dateTo]);
 
-  const alerts = useMemo(() => {
-    const result = [];
-    recipes.forEach((recipe) => {
-      if (recipe.isAssortmentBase) return; // base doesn't sell, skip
-      const cost = recipeCostMap[recipe.id] || 0;
-      const ratio = recipe.salePrice > 0 ? cost / recipe.salePrice : 0;
-      if (ratio > 0.35) {
-        result.push({
-          isDanger: ratio > 0.5,
-          message: `${recipe.name} : food cost ${formatPercent(ratio)}`,
-        });
-      }
-    });
-    return result;
+  // Recettes classées du food cost le plus élevé au plus bas (prix de vente renseigné)
+  const recipeRatios = useMemo(() => {
+    return recipes
+      .filter((r) => !r.isAssortmentBase && r.salePrice > 0)
+      .map((r) => { const cost = recipeCostMap[r.id] || 0; return { recipe: r, cost, ratio: cost / r.salePrice }; })
+      .sort((a, b) => b.ratio - a.ratio);
   }, [recipes, recipeCostMap]);
+  const highCount = recipeRatios.filter((x) => x.ratio > 0.35).length;
 
-  const foodCostColor =
-    stats.foodCostRatio < 0.30 ? palette.sage :
-    stats.foodCostRatio < 0.35 ? palette.amber : palette.wine;
+  // Cible du restaurant : 24–27 % (standard métier ~30 %)
+  const fc = stats.foodCostRatio;
+  const foodCostColor = stats.totalRevenue <= 0 ? palette.inkSoft : fc <= 0.27 ? palette.sage : fc <= 0.30 ? palette.amber : palette.wine;
+  const foodCostVerdict = stats.totalRevenue <= 0 ? 'Aucune vente sur la période'
+    : fc <= 0.27 ? 'Dans la cible (24–27 %)'
+    : fc <= 0.30 ? 'Au-dessus de la cible 24–27 %, sous le standard 30 %'
+    : 'Au-dessus du standard 30 % · marges sous pression';
+  const coveredLabel = stats.salesFrom
+    ? `Ventes du ${formatShortDate(stats.salesFrom, { withYear: true })} au ${formatShortDate(stats.salesTo, { withYear: true })}`
+    : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? 16 : 20 }}>
 
-      {/* ─── HERO : Food cost — la métrique #1 du restaurant ─────────────── */}
+      {/* ─── 1. Food cost réel de la période — la métrique #1 ────────────── */}
       <KpiCard
         variant="hero"
-        label="Food cost"
-        value={formatPercent(stats.foodCostRatio)}
-        sub={stats.foodCostRatio < 0.30
-          ? `✓ Sous 30 % · Sain (sur ${stats.dishesSold} plats vendus)`
-          : stats.foodCostRatio < 0.35
-            ? `Entre 30 et 35 % · à surveiller (sur ${stats.dishesSold} plats vendus)`
-            : `⚠ Au-dessus de 35 % · marges sous pression (sur ${stats.dishesSold} plats vendus)`}
+        label="Food cost réel"
+        value={stats.totalRevenue > 0 ? formatPercent(fc) : '—'}
+        sub={coveredLabel ? `${foodCostVerdict} · ${coveredLabel}` : foodCostVerdict}
         accentColor={foodCostColor}
       />
 
-      {/* ─── Secondaires : volume d'activité + coûts directs ─────────────── */}
+      {/* ─── 2. CA → coût matière → marge, puis achats réels ─────────────── */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: isMobile
-          ? 'repeat(2, 1fr)'
-          : 'repeat(auto-fit, minmax(180px, 1fr))',
+        gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
         gap: isMobile ? 10 : 16,
       }}>
-        <KpiCard label="Chiffre d'affaires" value={formatEuro(stats.totalRevenue)} sub={`${stats.dishesSold} plats vendus`} accentColor={palette.ink} />
-        <KpiCard label="Coût matière" value={formatEuro(stats.totalFoodCost)} sub="Théorique selon recettes" />
-        <KpiCard label="Achats alimentaires" value={formatEuro(stats.purchasesFood)} sub={`${purchases.length} factures`} />
+        <KpiCard label="Chiffre d'affaires HT" value={formatEuro(stats.totalRevenue)} sub={`${Math.round(stats.dishesSold)} plats vendus`} accentColor={palette.ink} />
+        <KpiCard label="Coût matière" value={formatEuro(stats.totalFoodCost)} sub="Théorique : recettes × quantités vendues" />
+        <KpiCard label="Marge brute" value={formatEuro(stats.grossMargin)} sub={stats.totalRevenue > 0 ? `${formatPercent(1 - fc)} du CA` : '—'} accentColor={palette.sage} />
+        <KpiCard label="Achats alimentaires" value={formatEuro(stats.purchasesFood)} sub={`Réel · ${stats.purchasesCount} facture${stats.purchasesCount > 1 ? 's' : ''} sur la période`} />
       </div>
 
-      {/* ─── Pied : coûts indirects (consommables, énergie, équipement) ─── */}
+      {/* ─── 3. Autres coûts (hors food cost) ────────────────────────────── */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: isMobile
-          ? 'repeat(2, 1fr)'
-          : 'repeat(auto-fit, minmax(160px, 1fr))',
+        gridTemplateColumns: isMobile ? 'repeat(3, 1fr)' : 'repeat(auto-fit, minmax(160px, 1fr))',
         gap: isMobile ? 8 : 12,
       }}>
-        <KpiCard variant="compact" label="Consommables" value={formatEuro(stats.purchasesConsumable)} sub="Hors alimentaire" accentColor={palette.amber} />
-        <KpiCard variant="compact" label="Énergie" value={formatEuro(stats.energyTotal)} sub={`${(energy || []).length} facture${(energy || []).length > 1 ? 's' : ''} · TTC`} accentColor={ENERGY_TYPES.electricity.color} />
-        <KpiCard
-          variant="compact"
-          label="Équipement"
-          value={formatEuro(stats.equipmentGrandTotal)}
-          sub={`Vaisselle · Entretien · Pannes`}
-          accentColor={palette.sage}
-        />
+        <KpiCard variant="compact" label="Consommables" value={formatEuro(stats.purchasesConsumable)} sub="Achats non alimentaires" accentColor={palette.amber} />
+        <KpiCard variant="compact" label="Énergie" value={formatEuro(stats.energyTotal)} sub={`TTC · ${stats.energyCount} facture${stats.energyCount > 1 ? 's' : ''}`} accentColor={ENERGY_TYPES.electricity.color} />
+        <KpiCard variant="compact" label="Équipement" value={formatEuro(stats.equipmentGrandTotal)} sub="Vaisselle · Entretien · Pannes" accentColor={palette.sage} />
       </div>
 
-      {alerts.length > 0 && (
-        <div className="mc-card" style={{ padding: 16, background: palette.amber + '10', borderColor: palette.amber + '40' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <AlertCircle size={16} style={{ color: palette.amber }} />
-            <span style={{ fontWeight: 600, fontSize: 14 }}>Alertes</span>
+      {/* ─── 4. Évolution mensuelle + recettes à surveiller ──────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: 16 }}>
+        <div className="mc-card" style={{ padding: 20 }}>
+          <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
+            CA et coût matière par mois
+          </h3>
+          <div style={{ fontSize: 11, color: palette.inkSoft, marginBottom: 12 }}>
+            Barre = CA HT · bordeaux = coût matière · vert = marge brute
           </div>
-          {alerts.map((alert, i) => (
-            <div key={i} style={{ fontSize: 13, color: alert.isDanger ? palette.wine : palette.inkSoft }}>
-              · {alert.message}
+          {monthlyActivity.length === 0 ? (
+            <div style={{ fontSize: 13, color: palette.inkSoft, padding: '32px 0', textAlign: 'center' }}>Aucune vente sur la période.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={monthlyActivity}>
+                <CartesianGrid strokeDasharray="3 3" stroke={palette.rule} vertical={false} />
+                <XAxis dataKey="label" stroke={palette.inkSoft} fontSize={11} />
+                <YAxis stroke={palette.inkSoft} fontSize={11} tickFormatter={(v) => (v >= 1000 ? Math.round(v / 1000) + ' k€' : v)} width={48} />
+                <Tooltip
+                  contentStyle={{ background: palette.cream, border: `1px solid ${palette.rule}`, borderRadius: 6, fontSize: 12 }}
+                  formatter={(v, name, item) => [formatEuro(v) + (name === 'Coût matière' ? ` (${formatPercent(item.payload.ratio)})` : ''), name]}
+                />
+                <Bar dataKey="cost" stackId="a" fill={palette.wine} name="Coût matière" />
+                <Bar dataKey="margin" stackId="a" fill={palette.sage} name="Marge brute" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        <div className="mc-card" style={{ padding: 20 }}>
+          <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
+            Recettes à surveiller
+          </h3>
+          <div style={{ fontSize: 11, color: palette.inkSoft, marginBottom: 12 }}>
+            {highCount > 0
+              ? `${highCount} recette${highCount > 1 ? 's' : ''} au-dessus de 35 % · coût / prix de vente`
+              : 'Aucune recette au-dessus de 35 % · les 8 plus élevées'}
+          </div>
+          {recipeRatios.length === 0 && (
+            <div style={{ fontSize: 13, color: palette.inkSoft }}>Aucune recette avec prix de vente.</div>
+          )}
+          {recipeRatios.slice(0, Math.max(8, highCount)).map(({ recipe, cost, ratio }) => (
+            <div
+              key={recipe.id}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: `1px solid ${palette.rule}` }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{recipe.name}</div>
+                <div style={{ fontSize: 11, color: palette.inkSoft }}>{formatEuro(cost)} / {formatEuro(recipe.salePrice)}</div>
+              </div>
+              <StatusPill ratio={ratio} />
             </div>
           ))}
         </div>
-      )}
+      </div>
 
-      {/* ── Supplier price gap summary ──────────────────────────────────── */}
+      {/* ─── 5. Écarts de prix entre fournisseurs (3 plus gros) ──────────── */}
       {(() => {
         const gaps = (alertsIndex || []).filter((a) => a.type === ALERT_TYPES.SUPPLIER_PRICE_GAP);
         if (gaps.length === 0) return null;
-        const top = gaps.slice(0, 3); // show only the 3 biggest gaps
+        const top = gaps.slice(0, 3);
         return (
-          <div
-            className="mc-card"
-            style={{ padding: 16, background: palette.wine + '08', borderColor: palette.wine + '30' }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <div className="mc-card" style={{ padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <TrendingUp size={16} style={{ color: palette.wine }} />
-                <span style={{ fontWeight: 600, fontSize: 14 }}>
-                  Écarts de prix entre fournisseurs
-                </span>
-                <span className="mc-pill" style={{ background: palette.wine + '20', color: palette.wine, fontWeight: 600 }}>
-                  {gaps.length}
-                </span>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>Écarts de prix entre fournisseurs</span>
+                <span className="mc-pill" style={{ background: palette.wine + '20', color: palette.wine, fontWeight: 600 }}>{gaps.length}</span>
               </div>
-              <div style={{ fontSize: 11, color: palette.inkSoft }}>
-                90 derniers jours · voir l'onglet Alertes pour le détail
-              </div>
+              <div style={{ fontSize: 11, color: palette.inkSoft }}>90 derniers jours · détail dans l'onglet Alertes</div>
             </div>
             {top.map((alert) => (
               <div
                 key={alert.article.id}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '2fr 2fr auto',
-                  gap: 12,
-                  alignItems: 'center',
-                  padding: '6px 0',
-                  fontSize: 13,
-                }}
+                style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr auto' : '2fr 2fr auto', gap: 12, alignItems: 'center', padding: '6px 0', fontSize: 13 }}
               >
                 <div style={{ fontWeight: 600, color: palette.ink }}>{alert.article.name}</div>
-                <div style={{ fontSize: 12, color: palette.inkSoft }}>
-                  <span style={{ color: palette.sage }}>{alert.cheapest.supplier}</span>
-                  {' '}<span style={{ color: palette.inkSoft }}>vs</span>{' '}
-                  <span style={{ color: palette.wine }}>{alert.dearest.supplier}</span>
-                </div>
-                <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, color: palette.wine, textAlign: 'right' }}>
-                  +{alert.gapPct.toFixed(0)} %
-                </div>
+                {!isMobile && (
+                  <div style={{ fontSize: 12, color: palette.inkSoft }}>
+                    <span style={{ color: palette.sage }}>{alert.cheapest.supplier}</span> vs <span style={{ color: palette.wine }}>{alert.dearest.supplier}</span>
+                  </div>
+                )}
+                <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, color: palette.wine, textAlign: 'right' }}>+{alert.gapPct.toFixed(0)} %</div>
               </div>
             ))}
-            {gaps.length > 3 && (
-              <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 6, fontStyle: 'italic' }}>
-                + {gaps.length - 3} autre{gaps.length - 3 > 1 ? 's' : ''} écart{gaps.length - 3 > 1 ? 's' : ''}…
-              </div>
-            )}
           </div>
         );
       })()}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
-        <div className="mc-card" style={{ padding: 20 }}>
-          <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 16px' }}>
-            Activité quotidienne
-          </h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={dailyActivity}>
-              <CartesianGrid strokeDasharray="3 3" stroke={palette.rule} />
-              <XAxis dataKey="label" stroke={palette.inkSoft} fontSize={11} />
-              <YAxis stroke={palette.inkSoft} fontSize={11} />
-              <Tooltip contentStyle={{ background: palette.cream, border: `1px solid ${palette.rule}`, borderRadius: 6, fontSize: 12 }} formatter={(v) => formatEuro(v)} />
-              <Bar dataKey="cost" stackId="a" fill={palette.wine} name="Coût" />
-              <Bar dataKey="margin" stackId="a" fill={palette.sage} name="Marge" radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="mc-card" style={{ padding: 20 }}>
-          <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 16px' }}>
-            Food cost par recette
-          </h3>
-          {recipes.filter((r) => !r.isAssortmentBase).map((recipe) => {
-            const cost = recipeCostMap[recipe.id] || 0;
-            const ratio = recipe.salePrice > 0 ? cost / recipe.salePrice : 0;
-            return (
-              <div
-                key={recipe.id}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  paddingBottom: 12,
-                  marginBottom: 12,
-                  borderBottom: `1px solid ${palette.rule}`,
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{recipe.name}</div>
-                  <div style={{ fontSize: 11, color: palette.inkSoft }}>Coût {formatEuro(cost)}</div>
-                </div>
-                <StatusPill ratio={ratio} />
-              </div>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }
@@ -17292,38 +17282,85 @@ function SalesView({ context }) {
     reader.readAsText(file);
   };
 
-  const aggregatedSales = useMemo(() => {
+  // ─── Récap par mois (périodes importées) ──────────────────────────────
+  const months = useMemo(() => {
     const map = {};
-    sales.forEach((sale) => {
-      const recipe = recipes.find((r) => r.id === sale.recipeId);
-      const key = sale.date + '|' + sale.recipeId;
-      if (!map[key]) map[key] = { ...sale, recipeName: recipe ? recipe.name : '?' };
-      else { map[key].qty += sale.qty; map[key].revenue += sale.revenue; }
-    });
-    return Object.values(map).sort((a, b) => b.date.localeCompare(a.date));
-  }, [sales, recipes]);
-
-  // ─── Pagination: show 100 rows at a time, with a "Charger plus" button ───
-  // Avoids rendering thousands of <tr> at once (which the browser handles slowly,
-  // independently of how fast our data calculations are).
-  const PAGE_SIZE = 100;
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-
-  // Reset pagination if the underlying data shrinks (e.g. user filters or clears)
-  useEffect(() => {
-    if (visibleCount > aggregatedSales.length && aggregatedSales.length > PAGE_SIZE) {
-      setVisibleCount(PAGE_SIZE);
+    for (const s of sales) {
+      const ym = (s.date || '').slice(0, 7);
+      if (!ym) continue;
+      if (!map[ym]) map[ym] = { ym, revenue: 0, qty: 0, lines: 0, from: s.date, to: s.dateTo || s.date };
+      const m = map[ym];
+      m.revenue += s.revenue || 0; m.qty += s.qty || 0; m.lines++;
+      if (s.date < m.from) m.from = s.date;
+      if ((s.dateTo || s.date) > m.to) m.to = s.dateTo || s.date;
     }
-  }, [aggregatedSales.length, visibleCount]);
+    return Object.values(map).sort((a, b) => a.ym.localeCompare(b.ym));
+  }, [sales]);
 
-  const visibleSales = aggregatedSales.slice(0, visibleCount);
-  const hasMore = aggregatedSales.length > visibleCount;
+  const [monthFilter, setMonthFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState('revenue');
+  const [sortDir, setSortDir] = useState('desc');
+  useEffect(() => { if (monthFilter !== 'all' && !months.some((m) => m.ym === monthFilter)) setMonthFilter('all'); }, [months, monthFilter]);
+
+  // Mois suivant à importer (après le dernier mois couvert)
+  const nextToImport = useMemo(() => {
+    if (months.length === 0) return null;
+    const last = months[months.length - 1];
+    const [y, m] = last.ym.split('-').map(Number);
+    const next = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}`;
+    const curYm = new Date().toISOString().slice(0, 7);
+    return { last: last.ym, next, ready: next < curYm };
+  }, [months]);
+
+  // ─── Tableau par recette sur le mois choisi ───────────────────────────
+  const byRecipe = useMemo(() => {
+    const map = {};
+    const menuName = (id) => (menus || []).find((m) => m.id === id)?.name || 'Menu';
+    for (const s of sales) {
+      if (monthFilter !== 'all' && (s.date || '').slice(0, 7) !== monthFilter) continue;
+      if (!map[s.recipeId]) {
+        const r = recipes.find((x) => x.id === s.recipeId);
+        map[s.recipeId] = { recipeId: s.recipeId, name: r ? r.name : '(recette supprimée)', qty: 0, revenue: 0, menuQty: 0, menuRevenue: 0, menus: new Set() };
+      }
+      const row = map[s.recipeId];
+      row.qty += s.qty || 0; row.revenue += s.revenue || 0;
+      if (s.menuId) { row.menuQty += s.qty || 0; row.menuRevenue += s.revenue || 0; row.menus.add(menuName(s.menuId)); }
+    }
+    const rows = Object.values(map).map((r) => ({ ...r, menus: [...r.menus].join(', ') }));
+    const total = rows.reduce((acc, r) => ({ qty: acc.qty + r.qty, revenue: acc.revenue + r.revenue, menuRevenue: acc.menuRevenue + r.menuRevenue }), { qty: 0, revenue: 0, menuRevenue: 0 });
+    return { rows, total };
+  }, [sales, recipes, menus, monthFilter]);
+
+  const visibleRows = useMemo(() => {
+    const q = normalizeText(search);
+    const rows = q ? byRecipe.rows.filter((r) => normalizeText(r.name).includes(q)) : byRecipe.rows;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      if (sortKey === 'name') return dir * a.name.localeCompare(b.name, 'fr');
+      if (sortKey === 'menu') return dir * ((a.menuRevenue / (a.revenue || 1)) - (b.menuRevenue / (b.revenue || 1)));
+      return dir * ((a[sortKey] || 0) - (b[sortKey] || 0));
+    });
+  }, [byRecipe, search, sortKey, sortDir]);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir(key === 'name' ? 'asc' : 'desc'); }
+  };
+  const sortTh = (k, label, align) => (
+    <th className="mc-th" style={{ cursor: 'pointer', textAlign: align || 'left', whiteSpace: 'nowrap', color: sortKey === k ? palette.ink : undefined }} onClick={() => toggleSort(k)}>
+      {label}{sortKey === k ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+    </th>
+  );
+  const num = { textAlign: 'right', fontFamily: 'Fraunces, serif', whiteSpace: 'nowrap' };
+  const fmtQty = (q) => (Math.round(q * 10) / 10).toLocaleString('fr-FR');
+  const grandRevenue = months.reduce((a, m) => a + m.revenue, 0);
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, gap: 12, flexWrap: 'wrap' }}>
         <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>
-          Ventes — Import CLYO
+          Ventes CLYO
         </h2>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
@@ -17349,9 +17386,6 @@ function SalesView({ context }) {
           </button>
         </div>
       </div>
-      <p style={{ fontSize: 12, color: palette.inkSoft, margin: '-12px 0 16px' }}>
-        Export CLYO « Ventes par articles » en PDF — un fichier par mois donne des tendances mensuelles. Plusieurs fichiers possibles en une fois.
-      </p>
       {clyoReports && (
         <ClyoMappingModal
           reports={clyoReports}
@@ -17362,67 +17396,113 @@ function SalesView({ context }) {
         />
       )}
 
-      <div className="mc-card" style={{ overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th className="mc-th">Date</th>
-              <th className="mc-th">Recette</th>
-              <th className="mc-th">Qté</th>
-              <th className="mc-th">CA</th>
-              <th className="mc-th"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleSales.map((sale) => (
-              <tr key={sale.id} className="mc-row">
-                <td className="mc-td">{formatShortDate(sale.date, { withYear: true })}</td>
-                <td className="mc-td" style={{ fontWeight: 500 }}>{sale.recipeName}</td>
-                <td className="mc-td">{Math.round(sale.qty * 10) / 10}</td>
-                <td className="mc-td" style={{ fontFamily: 'Fraunces, serif' }}>{formatEuro(sale.revenue)}</td>
-                <td className="mc-td" style={{ textAlign: 'right' }}>
-                  <button className="mc-btn mc-btn-danger" style={{ padding: '4px 10px' }} onClick={() => setSales(sales.filter((s) => s.id !== sale.id))}>
-                    <Trash2 size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {sales.length === 0 && (
-          <div style={{ textAlign: 'center', padding: 32, fontSize: 14, color: palette.inkSoft }}>
-            Aucune vente. Importez un export CLYO.
-          </div>
-        )}
+      {sales.length === 0 ? (
+        <div className="mc-card" style={{ textAlign: 'center', padding: 40, fontSize: 14, color: palette.inkSoft }}>
+          Aucune vente. Importez l'export CLYO « Ventes par articles » en PDF (un fichier par mois, plusieurs fichiers possibles en une fois).
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-        {/* Pagination controls — shown only when there's more data to load */}
-        {aggregatedSales.length > 0 && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '14px 20px',
-              borderTop: `1px solid ${palette.rule}`,
-              fontSize: 12,
-              color: palette.inkSoft,
-            }}
-          >
-            <span>
-              {visibleSales.length} sur {aggregatedSales.length} ventes affichées
-            </span>
-            {hasMore && (
-              <button
-                className="mc-btn mc-btn-ghost"
-                onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-                style={{ padding: '6px 14px' }}
-              >
-                Charger {Math.min(PAGE_SIZE, aggregatedSales.length - visibleCount)} de plus
-              </button>
-            )}
+          {/* ─── Périodes importées ──────────────────────────────────── */}
+          <div className="mc-card" style={{ overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', padding: '16px 20px 8px' }}>
+              <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Périodes importées</h3>
+              {nextToImport && (
+                <span style={{ fontSize: 12, color: nextToImport.ready ? palette.amber : palette.inkSoft }}>
+                  Dernier mois : {formatMonthLabel(nextToImport.last)}
+                  {nextToImport.ready ? ` · pensez à importer ${formatMonthLabel(nextToImport.next)}` : ' · à jour'}
+                </span>
+              )}
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th className="mc-th">Mois</th>
+                  <th className="mc-th">Période couverte</th>
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Plats</th>
+                  <th className="mc-th" style={{ textAlign: 'right' }}>CA HT</th>
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Part</th>
+                </tr>
+              </thead>
+              <tbody>
+                {months.map((m) => (
+                  <tr key={m.ym} className="mc-row" style={{ cursor: 'pointer', background: monthFilter === m.ym ? palette.paper : undefined }} onClick={() => setMonthFilter(monthFilter === m.ym ? 'all' : m.ym)}>
+                    <td className="mc-td" style={{ fontWeight: 600 }}>{formatMonthLabel(m.ym, { long: true })}</td>
+                    <td className="mc-td" style={{ color: palette.inkSoft, fontSize: 12 }}>{formatShortDate(m.from)} – {formatShortDate(m.to)}</td>
+                    <td className="mc-td" style={num}>{fmtQty(m.qty)}</td>
+                    <td className="mc-td" style={num}>{formatEuro(m.revenue)}</td>
+                    <td className="mc-td" style={{ ...num, color: palette.inkSoft }}>{grandRevenue > 0 ? formatPercent(m.revenue / grandRevenue) : '—'}</td>
+                  </tr>
+                ))}
+                <tr style={{ borderTop: `2px solid ${palette.rule}` }}>
+                  <td className="mc-td" style={{ fontWeight: 600 }}>Total</td>
+                  <td className="mc-td" style={{ color: palette.inkSoft, fontSize: 12 }}>{months.length} mois</td>
+                  <td className="mc-td" style={{ ...num, fontWeight: 600 }}>{fmtQty(months.reduce((a, m) => a + m.qty, 0))}</td>
+                  <td className="mc-td" style={{ ...num, fontWeight: 600 }}>{formatEuro(grandRevenue)}</td>
+                  <td className="mc-td"></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        )}
-      </div>
+
+          {/* ─── Par recette ──────────────────────────────────────────── */}
+          <div className="mc-card" style={{ overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '16px 20px 12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Par recette</h3>
+                <select className="mc-input" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} style={{ padding: '4px 8px', fontSize: 12, width: 'auto' }}>
+                  <option value="all">Toute la période</option>
+                  {months.map((m) => <option key={m.ym} value={m.ym}>{formatMonthLabel(m.ym, { long: true })}</option>)}
+                </select>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft }} />
+                <input className="mc-input" placeholder="Rechercher une recette…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ paddingLeft: 30, width: 220, fontSize: 13 }} />
+              </div>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  {sortTh('name', 'Recette')}
+                  {sortTh('qty', 'Qté', 'right')}
+                  {sortTh('revenue', 'CA HT', 'right')}
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Part</th>
+                  {sortTh('menu', 'Via menu', 'right')}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((r) => (
+                  <tr key={r.recipeId} className="mc-row">
+                    <td className="mc-td" style={{ fontWeight: 500 }}>
+                      {r.name}
+                      {r.menus && <div style={{ fontSize: 11, color: palette.inkSoft, fontWeight: 400 }}>{r.menus}</div>}
+                    </td>
+                    <td className="mc-td" style={num}>{fmtQty(r.qty)}</td>
+                    <td className="mc-td" style={num}>{formatEuro(r.revenue)}</td>
+                    <td className="mc-td" style={{ ...num, color: palette.inkSoft }}>{byRecipe.total.revenue > 0 ? formatPercent(r.revenue / byRecipe.total.revenue) : '—'}</td>
+                    <td className="mc-td" style={{ ...num, color: palette.inkSoft }}>{r.menuQty > 0 ? `${fmtQty(r.menuQty)} · ${formatPercent(r.menuRevenue / (r.revenue || 1))}` : '—'}</td>
+                  </tr>
+                ))}
+                {visibleRows.length === 0 && (
+                  <tr><td className="mc-td" colSpan={5} style={{ textAlign: 'center', color: palette.inkSoft, padding: 24 }}>Aucune recette ne correspond.</td></tr>
+                )}
+                {!search && visibleRows.length > 0 && (
+                  <tr style={{ borderTop: `2px solid ${palette.rule}` }}>
+                    <td className="mc-td" style={{ fontWeight: 600 }}>Total · {byRecipe.rows.length} recettes</td>
+                    <td className="mc-td" style={{ ...num, fontWeight: 600 }}>{fmtQty(byRecipe.total.qty)}</td>
+                    <td className="mc-td" style={{ ...num, fontWeight: 600 }}>{formatEuro(byRecipe.total.revenue)}</td>
+                    <td className="mc-td"></td>
+                    <td className="mc-td" style={{ ...num, color: palette.inkSoft }}>{byRecipe.total.revenue > 0 ? formatPercent(byRecipe.total.menuRevenue / byRecipe.total.revenue) : '—'}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            <div style={{ padding: '10px 20px', borderTop: `1px solid ${palette.rule}`, fontSize: 11, color: palette.inkSoft }}>
+              Qté = assiettes servies (un plat de menu compte 1 par menu ; entrées et desserts répartis entre les choix). Via menu = part vendue dans un menu.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -17608,7 +17688,7 @@ function AnalyticsView({ context }) {
       .map((recipe) => {
         const cost = indexedPlateCost(recipe, priceIndex, assortmentBase).plateCost;
         const recipeSales = sales.filter(
-          (s) => s.recipeId === recipe.id && (!dateFrom || s.date >= dateFrom) && (!dateTo || s.date <= dateTo)
+          (s) => s.recipeId === recipe.id && saleInPeriod(s, dateFrom, dateTo)
         );
         const totalQty = recipeSales.reduce((sum, s) => sum + s.qty, 0);
         const totalRevenue = recipeSales.reduce((sum, s) => sum + s.revenue, 0);
@@ -21372,7 +21452,7 @@ function SimulatorView({ context }) {
 
       // Annual savings projection based on actual sales volume for this recipe
       const recipeSales = sales.filter(
-        (s) => s.recipeId === recipe.id && (!dateFrom || s.date >= dateFrom) && (!dateTo || s.date <= dateTo)
+        (s) => s.recipeId === recipe.id && saleInPeriod(s, dateFrom, dateTo)
       );
       const totalQtySold = recipeSales.reduce((sum, s) => sum + s.qty, 0);
 
