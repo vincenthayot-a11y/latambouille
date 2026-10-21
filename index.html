@@ -1910,7 +1910,23 @@ const DEFAULT_ALERT_SETTINGS = {
   // l'utilisateur n'a pas choisi). Sensibilité = multiplicateur du rythme moyen.
   watchedSuppliers: [],
   supplierOverdueSensitivity: 2, // alerte si délai actuel > 2× l'intervalle moyen
+  // Fournisseurs exclus des comparaisons de prix (Achats : hausses, prix par
+  // fournisseur, simulateur ; Alertes : écarts fournisseurs). Dépannage ou
+  // qualité non comparable. Comparaison insensible à la casse / aux accents,
+  // par inclusion (« caraibe price » couvre « CARAIBE PRICE SARL »).
+  ignoredSuppliers: ['CARAIBE PRICE'],
 };
+
+/** Vrai si le nom de fournisseur correspond à l'un des fournisseurs ignorés. */
+function isIgnoredSupplier(name, ignoredSuppliers) {
+  const n = normalizeText(name);
+  if (!n) return false;
+  for (const x of (ignoredSuppliers || [])) {
+    const k = normalizeText(x);
+    if (k && n.includes(k)) return true;
+  }
+  return false;
+}
 
 /**
  * Fusionne les alertSettings chargés du storage avec les défauts. Même
@@ -1938,7 +1954,7 @@ function mergeAlertSettings(loaded) {
  * Returns an array of alert payloads (one per article with a notable gap),
  * NOT pushed to the global alerts list directly (caller does that).
  */
-function detectSupplierPriceGaps(articles, purchases, today, thresholdPct, windowDays = 90) {
+function detectSupplierPriceGaps(articles, purchases, today, thresholdPct, windowDays = 90, ignoredSuppliers = []) {
   const cutoff = parseLocalDate(today);
   cutoff.setDate(cutoff.getDate() - windowDays);
   const cutoffStr = cutoff.toISOString().slice(0, 10);
@@ -1948,7 +1964,7 @@ function detectSupplierPriceGaps(articles, purchases, today, thresholdPct, windo
   for (const p of purchases) {
     if (!p.date || p.date < cutoffStr) continue;
     const supplier = (p.supplier || '').trim();
-    if (!supplier) continue;
+    if (!supplier || isIgnoredSupplier(supplier, ignoredSuppliers)) continue;
     for (const it of (p.items || [])) {
       if (!it.articleId) continue;
       if (!(it.pricePerMasterUnit > 0) || !(it.convertedQty > 0)) continue;
@@ -2075,7 +2091,7 @@ function detectOverdueSuppliers(cadence, watchedSuppliers, sensitivity, today) {
   return out.sort((a, b) => (b.daysSinceLast / b.avgIntervalDays) - (a.daysSinceLast / a.avgIntervalDays));
 }
 
-function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, inventories, today, supplierGapThresholdPct, equipment, equipmentInventories }) {
+function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, inventories, today, supplierGapThresholdPct, ignoredSuppliers, equipment, equipmentInventories }) {
   const alerts = [];
 
   for (const article of articles) {
@@ -2214,7 +2230,7 @@ function buildAlertsIndex({ articles, outflowIndex, purchases, sales, recipes, i
   const gapThreshold = (typeof supplierGapThresholdPct === 'number' && supplierGapThresholdPct > 0)
     ? supplierGapThresholdPct
     : SUPPLIER_GAP_THRESHOLD_PCT_DEFAULT;
-  const supplierGaps = detectSupplierPriceGaps(articles, purchases, today, gapThreshold);
+  const supplierGaps = detectSupplierPriceGaps(articles, purchases, today, gapThreshold, 90, ignoredSuppliers);
   for (const gap of supplierGaps) {
     const article = articles.find((i) => i.id === gap.articleId);
     if (!article) continue;
@@ -4611,7 +4627,7 @@ select.mc-input { cursor: pointer; }
     align-content: stretch !important;
   }
 
-  /* Cas 2 — impression du Rapport (zone non portée, dans #root) : si une
+  /* Cas 2 — impression d'un onglet Pilotage (zone non portée, dans #root) : si une
      .mc-print-zone existe SANS portail, on réaffiche #root et on isole la zone. */
   body:not(:has(.mc-print-portal)) > #root { display: block !important; }
   body:not(:has(.mc-print-portal)) #root * { visibility: hidden; }
@@ -5859,10 +5875,9 @@ function CommandPalette({ isOpen, onClose, articles, recipes, setActiveTab }) {
       { type: 'action', id: 'nav-alerts',    label: 'Alertes',             hint: 'Stocks bas, hausses',       target: 'alerts'     },
       { type: 'action', id: 'nav-equipment', label: 'Équipement',          hint: 'Vaisselle & matériel',      target: 'equipment'  },
       { type: 'action', id: 'nav-energy',    label: 'Énergie',             hint: 'Factures EDF, gaz, eau',    target: 'energy'     },
-      { type: 'action', id: 'nav-report',    label: 'Rapport',             hint: 'Vue synthétique',           target: 'report'     },
       { type: 'action', id: 'nav-sales',     label: 'Ventes CLYO',         hint: 'Import des ventes',         target: 'sales'      },
-      { type: 'action', id: 'nav-analytics', label: 'Analyses',            hint: 'Tendances temporelles',     target: 'analytics'  },
-      { type: 'action', id: 'nav-simulator', label: 'Simulateur',          hint: 'Comparer des variantes',    target: 'simulator'  },
+      { type: 'action', id: 'nav-analytics', label: 'Achats',              hint: 'Hausses, fournisseurs, simulateur', target: 'analytics' },
+      { type: 'action', id: 'nav-carte',     label: 'Carte',               hint: 'Classement, écarts achats / ventes', target: 'carte' },
     ];
 
     const q = stripAccents((query || '').trim().toLowerCase());
@@ -6100,7 +6115,7 @@ function CommandPalette({ isOpen, onClose, articles, recipes, setActiveTab }) {
 const SIDEBAR_SECTIONS = [
   { id: 'home',      label: null,         items: ['dashboard'] },
   { id: 'quotidien', label: 'Quotidien',  items: ['articles', 'recipes', 'platsdujour', 'purchases', 'stocks', 'alerts', 'sales', 'energy', 'equipment'] },
-  { id: 'pilotage',  label: 'Pilotage',   items: ['report', 'analytics', 'simulator'] },
+  { id: 'pilotage',  label: 'Pilotage',   items: ['analytics', 'carte'] },
 ];
 
 // 'settings' est volontairement absent des sections : c'est un onglet rare
@@ -6791,6 +6806,7 @@ export default function LaTambouille() {
     return buildAlertsIndex({
       articles, outflowIndex, purchases, sales, recipes, inventories, today,
       supplierGapThresholdPct: alertSettings.supplierGapThresholdPct,
+      ignoredSuppliers: alertSettings.ignoredSuppliers,
       equipment, equipmentInventories,
     });
   }, [articles, outflowIndex, purchases, sales, recipes, inventories, alertSettings, equipment, equipmentInventories]);
@@ -6853,10 +6869,9 @@ export default function LaTambouille() {
     { id: 'alerts',     label: 'Alertes',           icon: AlertCircle       },
     { id: 'equipment',  label: 'Équipement',        icon: Wrench            },
     { id: 'energy',     label: 'Énergie',           icon: Zap               },
-    { id: 'report',     label: 'Rapport',           icon: ClipboardList     },
     { id: 'sales',      label: 'Ventes CLYO',       icon: Upload,           locked: phase1Mode },
-    { id: 'analytics',  label: 'Analyses',          icon: TrendingUp        },
-    { id: 'simulator',  label: 'Simulateur',        icon: Star              },
+    { id: 'analytics',  label: 'Achats',            icon: TrendingUp        },
+    { id: 'carte',      label: 'Carte',             icon: Star              },
     { id: 'settings',   label: 'Réglages',          icon: Settings          },
   ];
 
@@ -7071,11 +7086,10 @@ export default function LaTambouille() {
           {activeTab === 'equipment' && <EquipmentView context={context} />}
           {activeTab === 'energy' && <EnergyView context={context} />}
           {activeTab === 'alerts' && <AlertsView context={context} />}
-          {activeTab === 'report' && <ReportView context={context} />}
           {/* Sales stays accessible even in phase 1 — it's how the user activates phase 2 */}
           {activeTab === 'sales' && <SalesView context={context} />}
           {activeTab === 'analytics' && <AnalyticsView context={context} />}
-          {activeTab === 'simulator' && <SimulatorView context={context} />}
+          {activeTab === 'carte' && <CarteView context={context} />}
           {activeTab === 'settings' && <SettingsView context={context} />}
         </ErrorBoundary>
           </div>{/* close padding div */}
@@ -7171,7 +7185,7 @@ function Phase1LockScreen({ viewName, onGoToSales }) {
       }}>
         <strong>Ce qui restera disponible sans les ventes :</strong> Articles,
         Recettes (avec coût à l'assiette), Achats & Factures, Stocks (avec
-        inventaires), Alertes de prix, Simulateur de variantes.
+        inventaires), Alertes de prix, Pilotage › Achats (hausses, fournisseurs, simulateur).
       </div>
     </div>
   );
@@ -7761,8 +7775,8 @@ function ArticlesView({ context }) {
           <strong style={{ color: palette.sage }}>Variantes :</strong> un article maître
           (ex: "Lait de coco") peut avoir plusieurs variantes commerciales (ex: "La Créole 400ml",
           "Chaiko 1L"). Le prix utilisé dans les recettes est la <strong>moyenne pondérée</strong>{' '}
-          de toutes les variantes. Utilisez l'onglet Simulateur pour comparer le coût en
-          n'utilisant qu'une seule variante.
+          de toutes les variantes. Le simulateur de Pilotage › Achats permet de comparer
+          le coût en n'utilisant qu'une seule variante ou qu'un seul fournisseur.
         </InfoBanner>
       </div>
 
@@ -17711,91 +17725,806 @@ function purchaseGapAnalysis(articles, recipes, sales, purchases, priceIndex, da
   return { rows, from, to };
 }
 
-function AnalyticsView({ context }) {
-  const { articles, recipes, sales, purchases, priceIndex, dateFrom, dateTo } = context;
-  const isMobile = useIsMobile(720);
+// ─── Fenêtres glissantes (Achats) ─────────────────────────────────────────
+// Les analyses d'achats (hausses, prix par fournisseur, simulateur) raisonnent
+// sur une fenêtre récente de N mois se terminant aujourd'hui, indépendante du
+// filtre de période global — « ce qui se passe en ce moment ».
 
-  // ─── Article selector for price evolution chart ─────────────────────
-  // Default to the article with the most purchases — most likely to be
-  // interesting to the user. Falls back to first article if empty.
-  const articlesByPurchaseCount = useMemo(() => {
-    const counts = {};
-    for (const p of purchases) {
-      for (const it of (p.items || [])) {
-        if (it.articleId) counts[it.articleId] = (counts[it.articleId] || 0) + 1;
+function localIsoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function shiftMonths(dateStr, months) {
+  const d = parseLocalDate(dateStr);
+  d.setMonth(d.getMonth() + months);
+  return localIsoDate(d);
+}
+
+function shiftDays(dateStr, days) {
+  const d = parseLocalDate(dateStr);
+  d.setDate(d.getDate() + days);
+  return localIsoDate(d);
+}
+
+/**
+ * Agrège les achats d'articles sur [from, to] (bornes incluses), hors
+ * fournisseurs ignorés. Retourne { articleId: { value, qty, spent, count,
+ * suppliers: { nom: { value, qty, count } }, variants: { id: { … } } } }.
+ * value = Σ prix/unité maître × qté convertie (sert au prix moyen pondéré) ;
+ * spent = Σ item.total (montant HT facturé).
+ */
+function aggregateArticlePurchases(purchases, from, to, ignoredSuppliers) {
+  const byArticle = {};
+  for (const p of purchases) {
+    const d = p.date || '';
+    if (!d || (from && d < from) || (to && d > to)) continue;
+    const supplier = (p.supplier || 'Inconnu').trim() || 'Inconnu';
+    if (isIgnoredSupplier(supplier, ignoredSuppliers)) continue;
+    for (const it of (p.items || [])) {
+      if (!it.articleId || !(it.pricePerMasterUnit > 0) || !(it.convertedQty > 0)) continue;
+      const a = byArticle[it.articleId] || (byArticle[it.articleId] = { value: 0, qty: 0, spent: 0, count: 0, suppliers: {}, variants: {} });
+      const value = it.pricePerMasterUnit * it.convertedQty;
+      a.value += value; a.qty += it.convertedQty; a.spent += it.total || 0; a.count += 1;
+      const sup = a.suppliers[supplier] || (a.suppliers[supplier] = { value: 0, qty: 0, count: 0 });
+      sup.value += value; sup.qty += it.convertedQty; sup.count += 1;
+      if (it.variantId) {
+        const v = a.variants[it.variantId] || (a.variants[it.variantId] = { value: 0, qty: 0, count: 0 });
+        v.value += value; v.qty += it.convertedQty; v.count += 1;
       }
     }
-    return articles
-      .map((i) => ({ ...i, _purchaseCount: counts[i.id] || 0 }))
-      .filter((i) => i._purchaseCount > 0)
-      .sort((a, b) => b._purchaseCount - a._purchaseCount);
-  }, [articles, purchases]);
+  }
+  return byArticle;
+}
 
-  const [selectedArticleId, setSelectedArticleId] = useState(null);
-  useEffect(() => {
-    if (!selectedArticleId && articlesByPurchaseCount.length > 0) {
-      setSelectedArticleId(articlesByPurchaseCount[0].id);
-    }
-  }, [articlesByPurchaseCount, selectedArticleId]);
+/**
+ * Produits qui ont le plus augmenté : prix moyen pondéré sur la fenêtre
+ * récente [today − months, today] comparé à la fenêtre précédente de même
+ * durée. Le classement se fait sur le surcoût en € (qté récente × Δ prix),
+ * ce qui pondère naturellement par le montant acheté : une hausse de 40 % sur
+ * 2 kg de safran pèse moins qu'une hausse de 8 % sur 300 kg de vivaneau.
+ */
+function priceIncreaseRanking(articles, purchases, months, today, ignoredSuppliers) {
+  const recentFrom = shiftMonths(today, -months);
+  const prevTo = shiftDays(recentFrom, -1);
+  const prevFrom = shiftMonths(recentFrom, -months);
+  const recent = aggregateArticlePurchases(purchases, recentFrom, today, ignoredSuppliers);
+  const prev = aggregateArticlePurchases(purchases, prevFrom, prevTo, ignoredSuppliers);
+  const rows = [];
+  for (const [id, r] of Object.entries(recent)) {
+    const p = prev[id];
+    if (!p || !(p.qty > 0) || !(r.qty > 0)) continue;
+    const recentAvg = r.value / r.qty;
+    const prevAvg = p.value / p.qty;
+    if (!(prevAvg > 0)) continue;
+    const article = articles.find((a) => a.id === id);
+    if (!article) continue;
+    const pct = recentAvg / prevAvg - 1;
+    rows.push({
+      id, name: article.name, unit: article.unit || '',
+      prevAvg, recentAvg, pct,
+      qty: r.qty, spent: r.spent,
+      extraCost: r.qty * (recentAvg - prevAvg), // > 0 = surcoût sur la fenêtre récente
+    });
+  }
+  rows.sort((a, b) => b.extraCost - a.extraCost);
+  return { rows, recentFrom, prevFrom, prevTo };
+}
 
-  // ─── Compute monthly weighted-average price for the selected article ─
-  // For each month, aggregate all purchases of this article (across all
-  // variants and suppliers) and compute the weighted-average price per master
-  // unit using qty-weighted aggregation:
-  //   avg = sum(price_i × qty_i) / sum(qty_i)
-  // This matches the catalog-level price logic and is more honest than a
-  // simple mean across different pack sizes.
+/**
+ * Prix par fournisseur : pour chaque article acheté chez ≥ 2 fournisseurs
+ * (non ignorés) sur [from, to], prix moyen pondéré par fournisseur, écart
+ * entre le plus cher et le moins cher, et surcoût = dépensé − (qté totale ×
+ * prix du moins cher). Repère de négociation « à qualité égale ».
+ */
+function supplierPriceTable(articles, purchases, from, to, ignoredSuppliers) {
+  const agg = aggregateArticlePurchases(purchases, from, to, ignoredSuppliers);
+  const rows = [];
+  let totalSaving = 0, totalActual = 0;
+  for (const [id, a] of Object.entries(agg)) {
+    const names = Object.keys(a.suppliers);
+    if (names.length < 2) continue;
+    const article = articles.find((x) => x.id === id);
+    if (!article) continue;
+    const prices = names
+      .map((s) => ({ supplier: s, price: a.suppliers[s].value / a.suppliers[s].qty, qty: a.suppliers[s].qty, spent: a.suppliers[s].value }))
+      .sort((x, y) => x.price - y.price);
+    const cheapest = prices[0], dearest = prices[prices.length - 1];
+    const spreadPct = cheapest.price > 0 ? dearest.price / cheapest.price - 1 : 0;
+    const saving = a.value - cheapest.price * a.qty;
+    totalActual += a.value;
+    if (saving > 1) totalSaving += saving;
+    rows.push({ id, name: article.name, unit: article.unit || '', totalQty: a.qty, actualSpend: a.value, saving: Math.max(0, saving), spreadPct, cheapest, dearest, prices });
+  }
+  rows.sort((a, b) => b.saving - a.saving);
+  return { rows, totalSaving, totalActual };
+}
+
+/**
+ * Simulateur d'économies : « et si j'achetais cet article à `scenarioPrice`
+ * (€/unité maître) au lieu de mon prix moyen actuel ? »
+ *   · sur la fenêtre [from, to] : qté réelle × (scénario − moyen) → économie
+ *     (ou surcoût) en €, ramenée à l'année ;
+ *   · coût par assiette avant / après pour les recettes qui utilisent
+ *     l'article (directement ou via la base assiette) ;
+ *   · coût matière des ventes de la période globale (Σ Δ assiette × qté
+ *     vendue, ventes CLYO mensuelles via saleInPeriod) ;
+ *   · food cost réel recalculé : (achats alimentaires de la période des
+ *     ventes + Δ sur cet article) ÷ CA.
+ * Retourne null si l'article n'a pas été acheté sur la fenêtre.
+ */
+function simulatePriceScenario({ articleId, scenarioPrice, articles, purchases, recipes, sales, priceIndex, from, to, dateFrom, dateTo, ignoredSuppliers }) {
+  const agg = aggregateArticlePurchases(purchases, from, to, ignoredSuppliers)[articleId];
+  if (!agg || !(agg.qty > 0) || !(scenarioPrice >= 0)) return null;
+  const avg = agg.value / agg.qty;
+  const deltaUnit = scenarioPrice - avg;             // > 0 = plus cher
+  const windowSaving = -(agg.qty * deltaUnit);        // > 0 = économie
+  const windowDays = Math.max(1, daysBetween(from, to) + 1);
+  const annualSaving = windowSaving * 365 / windowDays;
+
+  // Assiettes impactées
+  const base = findAssortmentBase(recipes);
+  const baseUses = !!base && (base.articles || []).some((l) => l.id === articleId);
+  const overrides = { [articleId]: scenarioPrice };
+  const plates = [];
+  let matiereDelta = 0;
+  for (const r of recipes) {
+    if (r.isAssortmentBase) continue;
+    const direct = (r.articles || []).some((l) => l.id === articleId);
+    if (!direct && !(r.includesAssortment && baseUses)) continue;
+    const before = indexedPlateCost(r, priceIndex, base).plateCost;
+    const after = indexedPlateCostWithOverrides(r, priceIndex, base, overrides).plateCost;
+    let qtySold = 0;
+    for (const s of sales) if (s.recipeId === r.id && saleInPeriod(s, dateFrom, dateTo)) qtySold += s.qty || 0;
+    const delta = after - before;
+    plates.push({ recipe: r, before, after, delta, qtySold, deltaTotal: delta * qtySold });
+    matiereDelta += delta * qtySold;
+  }
+  plates.sort((a, b) => b.qtySold - a.qtySold);
+
+  // Food cost réel sur la période couverte par les ventes (même logique que le
+  // tableau de bord : achats bornés à la couverture réelle des ventes)
+  let revenue = 0, salesFrom = null, salesTo = null;
+  for (const s of sales) {
+    if (!saleInPeriod(s, dateFrom, dateTo)) continue;
+    revenue += s.revenue || 0;
+    if (!salesFrom || s.date < salesFrom) salesFrom = s.date;
+    const end = s.dateTo || s.date;
+    if (!salesTo || end > salesTo) salesTo = end;
+  }
+  const pFrom = salesFrom && (!dateFrom || salesFrom > dateFrom) ? salesFrom : dateFrom;
+  const pTo = salesTo && (!dateTo || salesTo < dateTo) ? salesTo : dateTo;
+  const typeById = {};
+  for (const a of articles) typeById[a.id] = a.type || 'food';
+  let purchasesFood = 0;
+  for (const p of purchases) {
+    if ((pFrom && (p.date || '') < pFrom) || (pTo && (p.date || '') > pTo)) continue;
+    for (const it of (p.items || [])) if ((typeById[it.articleId] || 'food') !== 'consumable') purchasesFood += it.total || 0;
+  }
+  const covAgg = revenue > 0 ? aggregateArticlePurchases(purchases, pFrom, pTo, ignoredSuppliers)[articleId] : null;
+  const covQty = covAgg ? covAgg.qty : 0;
+  const fcBefore = revenue > 0 ? purchasesFood / revenue : null;
+  const fcAfter = revenue > 0 ? (purchasesFood + covQty * deltaUnit) / revenue : null;
+
+  return {
+    avg, qty: agg.qty, spent: agg.value, count: agg.count, deltaUnit, windowSaving, annualSaving, windowDays,
+    plates, matiereDelta, revenue, purchasesFood, covQty, fcBefore, fcAfter, salesFrom, salesTo,
+  };
+}
+
+// ─── Petits composants partagés par les onglets Pilotage ──────────────────
+
+function PilotageHeader({ title, subtitle, children }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+      <div>
+        <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>{title}</h2>
+        <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>{subtitle}</div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        {children}
+        <button className="mc-btn mc-btn-ghost" onClick={() => window.print()} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 13 }}>
+          <Download size={14} /> Imprimer
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PrintHeader({ title, dateFrom, dateTo }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const range = dateFrom || dateTo
+    ? `du ${dateFrom ? formatShortDate(dateFrom, { withYear: true }) : '…'} au ${dateTo ? formatShortDate(dateTo, { withYear: true }) : '…'}`
+    : 'toute la période';
+  return (
+    <div className="mc-print-header" style={{ marginBottom: 8 }}>
+      <div style={{ fontFamily: 'Fraunces, serif', fontSize: 26, fontWeight: 700, color: palette.wine }}>Le Point de Vue</div>
+      <div style={{ fontSize: 14, color: palette.inkSoft, marginTop: 2 }}>{title} · {range}</div>
+      <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2 }}>Édité le {formatShortDate(today, { withYear: true })} · La Tambouille</div>
+    </div>
+  );
+}
+
+/** Liste horizontale « nom · montant (%) + barre », utilisée pour les répartitions. */
+function BreakdownBars({ rows, total, color, max = 8 }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {rows.slice(0, max).map(({ name, value }) => {
+        const pct = total > 0 ? (value / total) * 100 : 0;
+        return (
+          <div key={name}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4, gap: 8 }}>
+              <span style={{ color: palette.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+              <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, flexShrink: 0 }}>
+                {formatEuro(value)} <span style={{ fontWeight: 400, color: palette.inkSoft, fontSize: 11 }}>({pct.toFixed(0)} %)</span>
+              </span>
+            </div>
+            <div style={{ height: 5, background: palette.paper, borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 3 }} />
+            </div>
+          </div>
+        );
+      })}
+      {rows.length > max && (
+        <div style={{ fontSize: 11, color: palette.inkSoft, fontStyle: 'italic' }}>+ {rows.length - max} autres</div>
+      )}
+    </div>
+  );
+}
+
+const WINDOW_OPTIONS = [{ id: '3', label: '3 mois' }, { id: '6', label: '6 mois' }, { id: '12', label: '12 mois' }];
+const MONTHS_SHORT = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+const MONTHS_LONG = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   PILOTAGE · ACHATS — hausses, prix par fournisseur, simulateur, répartitions
+// ═══════════════════════════════════════════════════════════════════════════
+
+function AnalyticsView({ context }) {
+  const { articles, recipes, sales, purchases, priceIndex, dateFrom, dateTo, alertSettings, setAlertSettings } = context;
+  const isMobile = useIsMobile(720);
+  const today = useMemo(() => localIsoDate(new Date()), []);
+  const ignoredSuppliers = alertSettings.ignoredSuppliers || [];
+
+  // Fenêtre récente commune aux blocs « hausses », « fournisseurs » et « simulateur »
+  const [windowMonths, setWindowMonths] = useState('6');
+  const months = parseInt(windowMonths, 10);
+  const windowFrom = useMemo(() => shiftMonths(today, -months), [today, months]);
+
+  // ─── Fournisseurs ignorés (persisté dans alertSettings) ───────────────
+  const supplierNames = useMemo(() => {
+    const set = new Set();
+    for (const p of purchases) { const s = (p.supplier || '').trim(); if (s) set.add(s); }
+    return [...set].sort((a, b) => a.localeCompare(b, 'fr'));
+  }, [purchases]);
+  const addIgnored = (name) => {
+    if (!name || isIgnoredSupplier(name, ignoredSuppliers)) return;
+    setAlertSettings((s) => ({ ...s, ignoredSuppliers: [...(s.ignoredSuppliers || []), name] }));
+  };
+  const removeIgnored = (name) => setAlertSettings((s) => ({ ...s, ignoredSuppliers: (s.ignoredSuppliers || []).filter((x) => x !== name) }));
+
+  // ─── 1. Produits qui ont le plus augmenté ────────────────────────────
+  const ranking = useMemo(
+    () => priceIncreaseRanking(articles, purchases, months, today, ignoredSuppliers),
+    [articles, purchases, months, today, ignoredSuppliers]
+  );
+  const [showAllIncreases, setShowAllIncreases] = useState(false);
+  const increases = useMemo(() => ranking.rows.filter((r) => r.pct > 0.02), [ranking]);
+  const shownIncreases = showAllIncreases ? increases : increases.slice(0, 10);
+
+  // Courbe mensuelle de l'article sélectionné (clic sur une ligne)
+  const [chartArticleId, setChartArticleId] = useState(null);
+  const chartArticle = chartArticleId ? articles.find((a) => a.id === chartArticleId) : null;
   const priceEvolution = useMemo(() => {
-    if (!selectedArticleId) return [];
+    if (!chartArticleId) return [];
     const byMonth = {};
     for (const p of purchases) {
-      const month = (p.date || '').slice(0, 7); // "YYYY-MM"
-      if (!month) continue;
+      const month = (p.date || '').slice(0, 7);
+      if (!month || isIgnoredSupplier(p.supplier, ignoredSuppliers)) continue;
       for (const it of (p.items || [])) {
-        if (it.articleId !== selectedArticleId) continue;
-        if (!(it.pricePerMasterUnit > 0) || !(it.convertedQty > 0)) continue;
-        const entry = byMonth[month] || { totalValue: 0, totalQty: 0, count: 0 };
-        entry.totalValue += it.pricePerMasterUnit * it.convertedQty;
-        entry.totalQty += it.convertedQty;
-        entry.count += 1;
-        byMonth[month] = entry;
+        if (it.articleId !== chartArticleId || !(it.pricePerMasterUnit > 0) || !(it.convertedQty > 0)) continue;
+        const e = byMonth[month] || (byMonth[month] = { totalValue: 0, totalQty: 0, count: 0 });
+        e.totalValue += it.pricePerMasterUnit * it.convertedQty; e.totalQty += it.convertedQty; e.count += 1;
       }
     }
     return Object.entries(byMonth)
-      .map(([month, agg]) => ({
-        month,
-        avg: agg.totalQty > 0 ? agg.totalValue / agg.totalQty : 0,
-        qty: agg.totalQty,
-        count: agg.count,
-      }))
+      .map(([month, a]) => ({ month, avg: a.totalQty > 0 ? a.totalValue / a.totalQty : 0, count: a.count }))
       .sort((a, b) => a.month.localeCompare(b.month));
-  }, [purchases, selectedArticleId]);
+  }, [purchases, chartArticleId, ignoredSuppliers]);
 
-  // Compute % change between first and last data points for the summary line
-  const priceEvolutionSummary = useMemo(() => {
-    if (priceEvolution.length < 2) return null;
-    const first = priceEvolution[0].avg;
-    const last = priceEvolution[priceEvolution.length - 1].avg;
-    if (!(first > 0)) return null;
-    const pct = ((last - first) / first) * 100;
-    return { first, last, pct, monthsCount: priceEvolution.length };
-  }, [priceEvolution]);
+  // ─── 2. Prix par fournisseur ──────────────────────────────────────────
+  const supplierTable = useMemo(
+    () => supplierPriceTable(articles, purchases, windowFrom, today, ignoredSuppliers),
+    [articles, purchases, windowFrom, today, ignoredSuppliers]
+  );
+  const [showAllSuppliers, setShowAllSuppliers] = useState(false);
+  const shownSupplierRows = showAllSuppliers ? supplierTable.rows : supplierTable.rows.slice(0, 10);
 
-  const selectedArticle = articles.find((i) => i.id === selectedArticleId);
+  // ─── 3. Simulateur ────────────────────────────────────────────────────
+  const windowAgg = useMemo(
+    () => aggregateArticlePurchases(purchases, windowFrom, today, ignoredSuppliers),
+    [purchases, windowFrom, today, ignoredSuppliers]
+  );
+  const simOptions = useMemo(
+    () => articles
+      .filter((a) => windowAgg[a.id])
+      .map((a) => ({ ...a, _purchaseCount: windowAgg[a.id].count }))
+      .sort((a, b) => b._purchaseCount - a._purchaseCount),
+    [articles, windowAgg]
+  );
+  const [simArticleId, setSimArticleId] = useState(null);
+  const [simScenario, setSimScenario] = useState({ kind: 'supplier', key: null }); // kind: 'supplier' | 'variant' | 'free'
+  const [simFreePrice, setSimFreePrice] = useState('');
+  const simRef = useRef(null);
+  useEffect(() => {
+    if (!simArticleId && simOptions.length > 0) setSimArticleId(simOptions[0].id);
+  }, [simOptions, simArticleId]);
+  const simArticle = articles.find((a) => a.id === simArticleId) || null;
+  const simAgg = simArticleId ? windowAgg[simArticleId] : null;
+  const simSuppliers = useMemo(() => simAgg
+    ? Object.entries(simAgg.suppliers).map(([name, v]) => ({ key: name, label: name, price: v.value / v.qty, qty: v.qty })).sort((a, b) => a.price - b.price)
+    : [], [simAgg]);
+  const simVariants = useMemo(() => (simAgg && simArticle)
+    ? Object.entries(simAgg.variants).map(([vid, v]) => ({ key: vid, label: (simArticle.variants || []).find((x) => x.id === vid)?.name || 'Variante inconnue', price: v.value / v.qty, qty: v.qty })).sort((a, b) => a.price - b.price)
+    : [], [simAgg, simArticle]);
+  // Scénario par défaut : le fournisseur le moins cher
+  useEffect(() => {
+    setSimScenario(simSuppliers.length > 0 ? { kind: 'supplier', key: simSuppliers[0].key } : { kind: 'free', key: null });
+    setSimFreePrice('');
+  }, [simArticleId, windowFrom]); // eslint-disable-line
+  const scenarioPrice = useMemo(() => {
+    if (simScenario.kind === 'supplier') return simSuppliers.find((s) => s.key === simScenario.key)?.price ?? null;
+    if (simScenario.kind === 'variant') return simVariants.find((v) => v.key === simScenario.key)?.price ?? null;
+    const v = parseFloat(String(simFreePrice).replace(',', '.'));
+    return Number.isFinite(v) && v >= 0 ? v : null;
+  }, [simScenario, simSuppliers, simVariants, simFreePrice]);
+  const simulation = useMemo(() => (simArticleId && scenarioPrice != null)
+    ? simulatePriceScenario({ articleId: simArticleId, scenarioPrice, articles, purchases, recipes, sales, priceIndex, from: windowFrom, to: today, dateFrom, dateTo, ignoredSuppliers })
+    : null, [simArticleId, scenarioPrice, articles, purchases, recipes, sales, priceIndex, windowFrom, today, dateFrom, dateTo, ignoredSuppliers]);
+  const simulateArticle = (id) => {
+    setSimArticleId(id);
+    setTimeout(() => simRef.current && simRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  };
 
+  // ─── 4. Répartitions sur la période globale ───────────────────────────
+  const periodPurchases = useMemo(
+    () => purchases.filter((p) => (!dateFrom || p.date >= dateFrom) && (!dateTo || p.date <= dateTo)),
+    [purchases, dateFrom, dateTo]
+  );
+  const periodTotal = useMemo(() => periodPurchases.reduce((s, p) => s + (p.total || 0), 0), [periodPurchases]);
   const spendByCategory = useMemo(() => {
     const map = {};
-    purchases
-      .filter((p) => (!dateFrom || p.date >= dateFrom) && (!dateTo || p.date <= dateTo))
-      .forEach((purchase) => {
-        purchase.items.forEach((item) => {
-          const article = articles.find((i) => i.id === item.articleId);
-          const category = article ? article.category || 'Autre' : 'Autre';
-          map[category] = (map[category] || 0) + item.total;
-        });
-      });
-    return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [purchases, articles, dateFrom, dateTo]);
+    for (const p of periodPurchases) for (const it of (p.items || [])) {
+      const art = articles.find((a) => a.id === it.articleId);
+      const cat = art ? art.category || 'Autre' : 'Autre';
+      map[cat] = (map[cat] || 0) + (it.total || 0);
+    }
+    return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }, [periodPurchases, articles]);
+  const spendBySupplier = useMemo(() => {
+    const map = {};
+    for (const p of periodPurchases) { const s = (p.supplier || 'Inconnu').trim() || 'Inconnu'; map[s] = (map[s] || 0) + (p.total || 0); }
+    return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }, [periodPurchases]);
+
+  // ─── 5. Achats par article (période globale) ──────────────────────────
+  const [showArticles, setShowArticles] = useState(false);
+  const [articleSearch, setArticleSearch] = useState('');
+  const articleStats = useMemo(() => {
+    const map = {};
+    for (const p of periodPurchases) for (const it of (p.items || [])) {
+      if (!it.articleId) continue;
+      const e = map[it.articleId] || (map[it.articleId] = { totalQty: 0, totalAmount: 0, orderCount: 0 });
+      if (it.convertedQty > 0) e.totalQty += it.convertedQty;
+      e.totalAmount += it.total || 0; e.orderCount += 1;
+    }
+    return Object.entries(map)
+      .map(([id, st]) => ({ article: articles.find((a) => a.id === id), ...st }))
+      .filter((e) => e.article)
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [periodPurchases, articles]);
+  const filteredArticleStats = useMemo(() => {
+    const q = normalizeText(articleSearch);
+    return q ? articleStats.filter((e) => normalizeText(e.article.name).includes(q)) : articleStats;
+  }, [articleStats, articleSearch]);
+
+  const fmtQty = (v, unit) => `${v.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} ${unit}`;
+  const signedEuro = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${formatEuro(Math.abs(v))}`;
+  const cardHeader = { padding: '16px 20px', borderBottom: `1px solid ${palette.rule}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' };
+  const h3 = { fontSize: 18, fontWeight: 600, margin: '0 0 4px' };
+  const hint = { fontSize: 12, color: palette.inkSoft, maxWidth: 600 };
+  const windowLabel = `${formatShortDate(windowFrom, { withYear: true })} → ${formatShortDate(today, { withYear: true })}`;
+
+  return (
+    <div className="mc-print-zone" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <PrintHeader title="Achats" dateFrom={windowFrom} dateTo={today} />
+      <PilotageHeader title="Achats" subtitle="Hausses de prix, comparaison des fournisseurs et simulateur d'économies">
+        <span style={{ fontSize: 12, color: palette.inkSoft }}>Fenêtre</span>
+        <SegmentedToggle size="sm" value={windowMonths} onChange={setWindowMonths} options={WINDOW_OPTIONS} />
+      </PilotageHeader>
+
+      {/* ── 1. Produits qui ont le plus augmenté ─────────────────────── */}
+      <div className="mc-card" style={{ overflow: 'hidden' }}>
+        <div style={cardHeader}>
+          <div>
+            <h3 className="mc-display" style={h3}>Produits qui ont le plus augmenté</h3>
+            <div style={hint}>
+              Prix moyen payé sur les {months} derniers mois ({windowLabel}) comparé aux {months} mois précédents
+              ({formatShortDate(ranking.prevFrom, { withYear: true })} → {formatShortDate(ranking.prevTo, { withYear: true })}).
+              Classés par surcoût en € sur la fenêtre récente. Cliquez sur une ligne pour voir la courbe.
+            </div>
+          </div>
+        </div>
+        {increases.length === 0 ? (
+          <div style={{ padding: 32, textAlign: 'center', fontSize: 13, color: palette.inkSoft }}>
+            Aucune hausse notable : il faut des achats du même produit sur les deux fenêtres.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th className="mc-th">Produit</th>
+                  {!isMobile && <th className="mc-th" style={{ textAlign: 'right' }}>Avant</th>}
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Maintenant</th>
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Hausse</th>
+                  {!isMobile && <th className="mc-th" style={{ textAlign: 'right' }}>Acheté</th>}
+                  <th className="mc-th" style={{ textAlign: 'right' }}>Surcoût</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shownIncreases.map((r) => {
+                  const active = r.id === chartArticleId;
+                  const color = r.pct > 0.15 ? palette.wine : palette.amber;
+                  return (
+                    <tr key={r.id} className="mc-row" onClick={() => setChartArticleId(active ? null : r.id)} style={{ cursor: 'pointer', background: active ? palette.paper : undefined }}>
+                      <td className="mc-td" style={{ fontWeight: 500 }}>{r.name}</td>
+                      {!isMobile && <td className="mc-td" style={{ textAlign: 'right', color: palette.inkSoft, whiteSpace: 'nowrap' }}>{formatEuro(r.prevAvg)}/{r.unit}</td>}
+                      <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', whiteSpace: 'nowrap' }}>{formatEuro(r.recentAvg)}/{r.unit}</td>
+                      <td className="mc-td" style={{ textAlign: 'right' }}>
+                        <span className="mc-pill" style={{ background: color + '20', color, whiteSpace: 'nowrap' }}>+{(r.pct * 100).toFixed(0)} %</span>
+                      </td>
+                      {!isMobile && <td className="mc-td" style={{ textAlign: 'right', color: palette.inkSoft, whiteSpace: 'nowrap' }}>{fmtQty(r.qty, r.unit)}</td>}
+                      <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600, color: palette.wine, whiteSpace: 'nowrap' }}>+{formatEuro(r.extraCost)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {increases.length > 10 && (
+          <div style={{ padding: '10px 20px', borderTop: `1px solid ${palette.rule}`, fontSize: 12, color: palette.inkSoft, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <span>{showAllIncreases ? `${increases.length} produits en hausse` : `${increases.length - 10} autres produits en hausse (surcoût plus faible)`}</span>
+            <button type="button" className="mc-btn" onClick={() => setShowAllIncreases((v) => !v)} style={{ fontSize: 12, padding: '2px 8px' }}>{showAllIncreases ? 'Réduire' : 'Voir tout'}</button>
+          </div>
+        )}
+        {chartArticle && (
+          <div style={{ padding: '16px 20px', borderTop: `1px solid ${palette.rule}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{chartArticle.name} · prix moyen par mois, tous fournisseurs non ignorés</div>
+              <button type="button" className="mc-btn" onClick={() => simulateArticle(chartArticle.id)} style={{ fontSize: 12, padding: '2px 8px' }}>Simuler</button>
+            </div>
+            {priceEvolution.length < 2 ? (
+              <div style={{ fontSize: 13, color: palette.inkSoft }}>Pas assez de mois d'achats pour tracer une courbe.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={priceEvolution} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke={palette.rule} strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="month" stroke={palette.inkSoft} tick={{ fontSize: 11 }} tickFormatter={(m) => { const [y, mo] = m.split('-'); return `${MONTHS_SHORT[parseInt(mo, 10) - 1] || mo} ${y.slice(2)}`; }} />
+                  <YAxis stroke={palette.inkSoft} tick={{ fontSize: 11 }} tickFormatter={(v) => `${v.toFixed(v < 10 ? 2 : 0)} €`} domain={['auto', 'auto']} width={56} />
+                  <Tooltip
+                    contentStyle={{ background: palette.cream, border: `1px solid ${palette.rule}`, borderRadius: 6, fontSize: 12 }}
+                    formatter={(value) => [`${formatEuro(value)}/${chartArticle.unit}`, 'Prix moyen']}
+                    labelFormatter={(m) => { const [y, mo] = m.split('-'); return `${MONTHS_LONG[parseInt(mo, 10) - 1] || mo} ${y}`; }}
+                  />
+                  <Line type="monotone" dataKey="avg" name="Prix moyen" stroke={palette.wine} strokeWidth={2.5} dot={{ fill: palette.wine, r: 3 }} activeDot={{ r: 5 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── 2. Prix par fournisseur ──────────────────────────────────── */}
+      <div className="mc-card" style={{ overflow: 'hidden' }}>
+        <div style={cardHeader}>
+          <div>
+            <h3 className="mc-display" style={h3}>Prix par fournisseur</h3>
+            <div style={hint}>
+              Articles achetés chez plusieurs fournisseurs sur les {months} derniers mois, prix moyen pondéré par fournisseur.
+              Surcoût = ce qui a été payé en plus par rapport au moins cher — <em>à qualité égale</em>, c'est vous qui jugez.
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: palette.inkSoft, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} className="mc-no-print">
+            <span>Ignorés :</span>
+            {ignoredSuppliers.length === 0 && <span style={{ fontStyle: 'italic' }}>aucun</span>}
+            {ignoredSuppliers.map((name) => (
+              <span key={name} className="mc-pill" style={{ background: palette.paper, color: palette.ink, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {name}
+                <button type="button" onClick={() => removeIgnored(name)} title="Ne plus ignorer" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: palette.inkSoft, padding: 0, lineHeight: 1 }}><X size={12} /></button>
+              </span>
+            ))}
+            <select className="mc-input" value="" onChange={(e) => addIgnored(e.target.value)} style={{ fontSize: 12, padding: '3px 6px', width: 'auto' }}>
+              <option value="">+ ignorer…</option>
+              {supplierNames.filter((s) => !isIgnoredSupplier(s, ignoredSuppliers)).map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+        </div>
+        {supplierTable.rows.length === 0 ? (
+          <div style={{ padding: 32, textAlign: 'center', fontSize: 13, color: palette.inkSoft }}>
+            Aucun article acheté chez plusieurs fournisseurs sur les {months} derniers mois.
+          </div>
+        ) : (
+          <>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th className="mc-th">Article</th>
+                    <th className="mc-th">Prix par fournisseur (du moins cher au plus cher)</th>
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Écart</th>
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Surcoût</th>
+                    <th className="mc-th mc-no-print"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shownSupplierRows.map((row) => (
+                    <tr key={row.id} className="mc-row">
+                      <td className="mc-td" style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>
+                        {row.name}
+                        <div style={{ fontSize: 11, color: palette.inkSoft, fontWeight: 400 }}>{fmtQty(row.totalQty, row.unit)} · {formatEuro(row.actualSpend)}</div>
+                      </td>
+                      <td className="mc-td">
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {row.prices.map((p, i) => (
+                            <span key={p.supplier} style={{
+                              fontSize: 12, padding: '2px 8px', borderRadius: 12, whiteSpace: 'nowrap',
+                              background: i === 0 ? palette.sage + '20' : palette.paper,
+                              color: i === 0 ? palette.sage : palette.inkSoft,
+                              fontWeight: i === 0 ? 600 : 400,
+                              border: `1px solid ${i === 0 ? palette.sage + '40' : palette.rule}`,
+                            }}>
+                              {p.supplier} · {formatEuro(p.price)}/{row.unit}
+                              <span style={{ opacity: 0.7 }}> ({p.qty.toLocaleString('fr-FR', { maximumFractionDigits: 0 })})</span>
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="mc-td" style={{ textAlign: 'right' }}>
+                        <span className="mc-pill" style={{ background: (row.spreadPct > 0.2 ? palette.wine : palette.amber) + '20', color: row.spreadPct > 0.2 ? palette.wine : palette.amber, whiteSpace: 'nowrap' }}>+{(row.spreadPct * 100).toFixed(0)} %</span>
+                      </td>
+                      <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600, color: palette.wine, whiteSpace: 'nowrap' }}>{row.saving > 0 ? formatEuro(row.saving) : '—'}</td>
+                      <td className="mc-td mc-no-print" style={{ textAlign: 'right' }}>
+                        <button type="button" className="mc-btn" onClick={() => simulateArticle(row.id)} style={{ fontSize: 12, padding: '2px 8px' }}>Simuler</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding: '10px 20px', borderTop: `1px solid ${palette.rule}`, fontSize: 12, color: palette.inkSoft, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <span>
+                {supplierTable.rows.length} article{supplierTable.rows.length > 1 ? 's' : ''} multi-fournisseurs · surcoût total <strong>{formatEuro(supplierTable.totalSaving)}</strong>
+                {supplierTable.totalActual > 0 && ` (${((supplierTable.totalSaving / supplierTable.totalActual) * 100).toFixed(1)} % de ces achats)`} si tout avait été acheté au moins cher
+              </span>
+              {supplierTable.rows.length > 10 && (
+                <button type="button" className="mc-btn" onClick={() => setShowAllSuppliers((v) => !v)} style={{ fontSize: 12, padding: '2px 8px' }}>{showAllSuppliers ? 'Réduire' : 'Voir tout'}</button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── 3. Simulateur d'économies ────────────────────────────────── */}
+      <div ref={simRef} className="mc-card" style={{ overflow: 'hidden', scrollMarginTop: 16 }}>
+        <div style={cardHeader}>
+          <div>
+            <h3 className="mc-display" style={h3}>Simulateur d'économies</h3>
+            <div style={hint}>
+              Et si cet article était acheté uniquement chez un fournisseur, dans une variante, ou à un prix négocié ?
+              Calcul sur les quantités réellement achetées sur les {months} derniers mois — <em>à qualité égale</em>.
+            </div>
+          </div>
+          {simOptions.length > 0 && <ArticleSearchSelect options={simOptions} value={simArticleId} onChange={setSimArticleId} />}
+        </div>
+        {simOptions.length === 0 ? (
+          <div style={{ padding: 32, textAlign: 'center', fontSize: 13, color: palette.inkSoft }}>Aucun achat sur les {months} derniers mois.</div>
+        ) : simArticle && simAgg && (
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(240px, 1fr) 2fr', gap: 0 }}>
+            {/* Scénario */}
+            <div style={{ padding: 20, borderRight: isMobile ? 'none' : `1px solid ${palette.rule}`, borderBottom: isMobile ? `1px solid ${palette.rule}` : 'none' }}>
+              <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Aujourd'hui</div>
+              <div className="mc-display" style={{ fontSize: 22, fontWeight: 700 }}>
+                {formatEuro(simAgg.value / simAgg.qty)}<span style={{ fontSize: 12, fontWeight: 400, color: palette.inkSoft }}>/{simArticle.unit}</span>
+              </div>
+              <div style={{ fontSize: 12, color: palette.inkSoft, marginBottom: 16 }}>
+                prix moyen payé · {fmtQty(simAgg.qty, simArticle.unit)} · {formatEuro(simAgg.value)} · {simAgg.count} ligne{simAgg.count > 1 ? 's' : ''}
+              </div>
+              <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Scénario</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+                {simSuppliers.map((s) => (
+                  <label key={'s' + s.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input type="radio" name="sim-scenario" checked={simScenario.kind === 'supplier' && simScenario.key === s.key} onChange={() => setSimScenario({ kind: 'supplier', key: s.key })} />
+                    <span style={{ flex: 1 }}>Tout chez <strong>{s.label}</strong></span>
+                    <span style={{ fontFamily: 'Fraunces, serif', whiteSpace: 'nowrap' }}>{formatEuro(s.price)}/{simArticle.unit}</span>
+                  </label>
+                ))}
+                {simVariants.map((v) => (
+                  <label key={'v' + v.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input type="radio" name="sim-scenario" checked={simScenario.kind === 'variant' && simScenario.key === v.key} onChange={() => setSimScenario({ kind: 'variant', key: v.key })} />
+                    <span style={{ flex: 1 }}>Variante <strong>{v.label}</strong></span>
+                    <span style={{ fontFamily: 'Fraunces, serif', whiteSpace: 'nowrap' }}>{formatEuro(v.price)}/{simArticle.unit}</span>
+                  </label>
+                ))}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input type="radio" name="sim-scenario" checked={simScenario.kind === 'free'} onChange={() => setSimScenario({ kind: 'free', key: null })} />
+                  <span style={{ flex: 1 }}>Prix libre</span>
+                  <input
+                    type="number" step="0.01" min="0" className="mc-input" placeholder={(simAgg.value / simAgg.qty).toFixed(2)}
+                    value={simFreePrice}
+                    onFocus={() => setSimScenario({ kind: 'free', key: null })}
+                    onChange={(e) => { setSimFreePrice(e.target.value); setSimScenario({ kind: 'free', key: null }); }}
+                    style={{ width: 90, fontSize: 13, padding: '4px 8px', textAlign: 'right' }}
+                  />
+                  <span style={{ fontSize: 12, color: palette.inkSoft }}>€/{simArticle.unit}</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Résultat */}
+            <div style={{ padding: 20 }}>
+              {!simulation ? (
+                <div style={{ fontSize: 13, color: palette.inkSoft }}>Choisissez un scénario ou saisissez un prix.</div>
+              ) : (() => {
+                const saving = simulation.windowSaving;
+                const good = saving > 0.5, bad = saving < -0.5;
+                const color = good ? palette.sage : bad ? palette.wine : palette.inkSoft;
+                const word = good ? 'économisés' : bad ? 'de surcoût' : 'sans changement';
+                const fcColor = (r) => r == null ? palette.inkSoft : r <= 0.27 ? palette.sage : r <= 0.30 ? palette.amber : palette.wine;
+                return (
+                  <>
+                    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'baseline', marginBottom: 14 }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>Sur {months} mois</div>
+                        <div className="mc-display" style={{ fontSize: 28, fontWeight: 700, color }}>{formatEuro(Math.abs(saving))}</div>
+                        <div style={{ fontSize: 12, color: palette.inkSoft }}>{word} · {signedEuro(simulation.deltaUnit)}/{simArticle.unit} × {fmtQty(simulation.qty, simArticle.unit)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>Par an</div>
+                        <div className="mc-display" style={{ fontSize: 28, fontWeight: 700, color }}>{formatEuro(Math.abs(simulation.annualSaving))}</div>
+                        <div style={{ fontSize: 12, color: palette.inkSoft }}>au même rythme d'achat</div>
+                      </div>
+                      {simulation.revenue > 0 && (
+                        <div>
+                          <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>Food cost réel</div>
+                          <div className="mc-display" style={{ fontSize: 28, fontWeight: 700 }}>
+                            <span style={{ color: fcColor(simulation.fcBefore) }}>{formatPercent(simulation.fcBefore)}</span>
+                            <span style={{ fontSize: 16, color: palette.inkSoft, margin: '0 8px' }}>→</span>
+                            <span style={{ color: fcColor(simulation.fcAfter) }}>{formatPercent(simulation.fcAfter)}</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: palette.inkSoft }}>
+                            ventes du {formatShortDate(simulation.salesFrom)} au {formatShortDate(simulation.salesTo, { withYear: true })} · coût matière {signedEuro(simulation.matiereDelta)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {simulation.plates.length === 0 ? (
+                      <div style={{ fontSize: 12, color: palette.inkSoft }}>Aucune recette n'utilise cet article : pas d'impact sur les assiettes.</div>
+                    ) : (
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                          <thead>
+                            <tr>
+                              <th className="mc-th">Coût par assiette</th>
+                              <th className="mc-th" style={{ textAlign: 'right' }}>Avant</th>
+                              <th className="mc-th" style={{ textAlign: 'right' }}>Après</th>
+                              {!isMobile && <th className="mc-th" style={{ textAlign: 'right' }}>Vendus</th>}
+                              <th className="mc-th" style={{ textAlign: 'right' }}>Impact</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {simulation.plates.slice(0, 8).map((p) => {
+                              const c = p.delta < -0.001 ? palette.sage : p.delta > 0.001 ? palette.wine : palette.inkSoft;
+                              return (
+                                <tr key={p.recipe.id} className="mc-row">
+                                  <td className="mc-td" style={{ fontWeight: 500 }}>{p.recipe.name}</td>
+                                  <td className="mc-td" style={{ textAlign: 'right', color: palette.inkSoft, fontFamily: 'Fraunces, serif' }}>{formatEuro(p.before)}</td>
+                                  <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', color: c }}>{formatEuro(p.after)}</td>
+                                  {!isMobile && <td className="mc-td" style={{ textAlign: 'right', color: palette.inkSoft }}>{Math.round(p.qtySold)}</td>}
+                                  <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600, color: c, whiteSpace: 'nowrap' }}>{signedEuro(p.deltaTotal)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {simulation.plates.length > 8 && (
+                          <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 6 }}>+ {simulation.plates.length - 8} autres recettes (moins vendues)</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── 4. Répartitions (période globale) ────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
+        <div className="mc-card" style={{ padding: 20 }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 4px' }}>Achats par catégorie</h3>
+          <div style={{ fontSize: 12, color: palette.inkSoft, marginBottom: 14 }}>Période sélectionnée · {formatEuro(periodTotal)} · {periodPurchases.length} facture{periodPurchases.length > 1 ? 's' : ''}</div>
+          {spendByCategory.length === 0 ? <div style={{ fontSize: 13, color: palette.inkSoft }}>Aucun achat sur la période.</div>
+            : <BreakdownBars rows={spendByCategory} total={periodTotal} color={palette.sage} />}
+        </div>
+        <div className="mc-card" style={{ padding: 20 }}>
+          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 4px' }}>Achats par fournisseur</h3>
+          <div style={{ fontSize: 12, color: palette.inkSoft, marginBottom: 14 }}>Période sélectionnée · {spendBySupplier.length} fournisseur{spendBySupplier.length > 1 ? 's' : ''}</div>
+          {spendBySupplier.length === 0 ? <div style={{ fontSize: 13, color: palette.inkSoft }}>Aucun achat sur la période.</div>
+            : <BreakdownBars rows={spendBySupplier} total={periodTotal} color={palette.wine} />}
+        </div>
+      </div>
+
+      {/* ── 5. Achats par article (repliable) ────────────────────────── */}
+      <div className="mc-card" style={{ overflow: 'hidden' }}>
+        <button type="button" className="mc-btn mc-btn-ghost" onClick={() => setShowArticles((v) => !v)}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 20px', fontSize: 13, width: '100%', justifyContent: 'space-between', borderRadius: 0, border: 'none' }}>
+          <span><strong>Achats par article</strong> <span style={{ color: palette.inkSoft }}>· période sélectionnée · {articleStats.length} article{articleStats.length > 1 ? 's' : ''}</span></span>
+          <span style={{ color: palette.inkSoft, fontSize: 12 }}>{showArticles ? '▲ Masquer' : '▼ Voir le détail'}</span>
+        </button>
+        {showArticles && (
+          <div style={{ padding: '0 20px 16px' }}>
+            <div style={{ position: 'relative', maxWidth: 320, marginBottom: 12 }} className="mc-no-print">
+              <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft }} />
+              <input type="text" value={articleSearch} onChange={(e) => setArticleSearch(e.target.value)} placeholder="Rechercher un article…"
+                style={{ paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8, border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13, width: '100%' }} />
+            </div>
+            {filteredArticleStats.length === 0 ? (
+              <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic', padding: '12px 0' }}>{articleSearch ? 'Aucun article ne correspond.' : 'Aucun achat sur la période.'}</div>
+            ) : (
+              <>
+                <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        <th className="mc-th">Article</th>
+                        <th className="mc-th" style={{ textAlign: 'right' }}>Qté</th>
+                        <th className="mc-th" style={{ textAlign: 'right' }}>Montant HT</th>
+                        {!isMobile && <th className="mc-th" style={{ textAlign: 'right' }}>Lignes</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredArticleStats.map(({ article, totalQty, totalAmount, orderCount }) => (
+                        <tr key={article.id} className="mc-row">
+                          <td className="mc-td"><div style={{ fontWeight: 500 }}>{article.name}</div><div style={{ fontSize: 11, color: palette.inkSoft }}>{article.category}</div></td>
+                          <td className="mc-td" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{fmtQty(totalQty, article.unit || '')}</td>
+                          <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>{formatEuro(totalAmount)}</td>
+                          {!isMobile && <td className="mc-td" style={{ textAlign: 'right', color: palette.inkSoft }}>{orderCount}</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 10, textAlign: 'right' }}>
+                  {filteredArticleStats.length} article{filteredArticleStats.length > 1 ? 's' : ''} · total {formatEuro(filteredArticleStats.reduce((s, e) => s + e.totalAmount, 0))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   PILOTAGE · CARTE — classement de la carte et écarts achats / ventes
+// ═══════════════════════════════════════════════════════════════════════════
+
+function CarteView({ context }) {
+  const { articles, recipes, sales, purchases, priceIndex, dateFrom, dateTo } = context;
+  const isMobile = useIsMobile(720);
 
   // ─── Classement de la carte (menu engineering) ────────────────────────
   const soldCategories = useMemo(() => {
@@ -17825,373 +18554,10 @@ function AnalyticsView({ context }) {
     [gapData, showAllGaps]
   );
 
-  // ─── Optimiseur fournisseur ───────────────────────────────────────────
-  // Pour chaque article acheté chez ≥ 2 fournisseurs sur la période choisie,
-  // compare le prix moyen pondéré par fournisseur. Calcule l'écart entre ce
-  // qui a été réellement dépensé et le "tout au moins cher" théorique.
-  // Période INDÉPENDANTE du filtre global (sélecteur dédié ci-dessous).
-  const [optimizerPeriod, setOptimizerPeriod] = useState('12'); // '3' | '6' | '12' | 'all'
-  const optimizerData = useMemo(() => {
-    const now = new Date();
-    let since = null;
-    if (optimizerPeriod !== 'all') {
-      const months = parseInt(optimizerPeriod, 10);
-      const d = new Date(now.getFullYear(), now.getMonth() - months, now.getDate());
-      since = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    }
-
-    // article -> supplier -> { value, qty }
-    const byArticle = {};
-    for (const p of purchases) {
-      if (since && (p.date || '') < since) continue;
-      const sup = (p.supplier || 'Inconnu').trim() || 'Inconnu';
-      for (const it of (p.items || [])) {
-        const aid = it.articleId;
-        if (!aid || !(it.pricePerMasterUnit > 0) || !(it.convertedQty > 0)) continue;
-        const a = (byArticle[aid] = byArticle[aid] || {});
-        const s = (a[sup] = a[sup] || { value: 0, qty: 0 });
-        s.value += it.pricePerMasterUnit * it.convertedQty;
-        s.qty += it.convertedQty;
-      }
-    }
-
-    const rows = [];
-    let totalSaving = 0;
-    let totalActual = 0;
-    for (const [aid, sups] of Object.entries(byArticle)) {
-      const supNames = Object.keys(sups);
-      if (supNames.length < 2) continue; // besoin d'au moins 2 fournisseurs
-      const article = articles.find((x) => x.id === aid);
-      if (!article) continue;
-
-      const prices = supNames.map((s) => ({
-        supplier: s,
-        price: sups[s].value / sups[s].qty,
-        qty: sups[s].qty,
-        spent: sups[s].value,
-      })).sort((a, b) => a.price - b.price);
-
-      const cheapest = prices[0];
-      const totalQty = prices.reduce((sum, p) => sum + p.qty, 0);
-      const actualSpend = prices.reduce((sum, p) => sum + p.spent, 0);
-      const idealSpend = cheapest.price * totalQty;
-      const saving = actualSpend - idealSpend;
-
-      totalActual += actualSpend;
-      if (saving > 1) {
-        totalSaving += saving;
-        rows.push({
-          id: aid,
-          name: article.name,
-          unit: article.unit,
-          totalQty,
-          actualSpend,
-          idealSpend,
-          saving,
-          cheapest,
-          prices,
-        });
-      }
-    }
-    rows.sort((a, b) => b.saving - a.saving);
-    return { rows, totalSaving, totalActual };
-  }, [purchases, articles, optimizerPeriod]);
-
-  const OPTIMIZER_PERIOD_LABELS = { '3': '3 mois', '6': '6 mois', '12': '12 mois', 'all': 'Tout' };
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div>
-        <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Analyses</h2>
-        <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>
-          Optimisation des achats, évolution des prix et rentabilité des recettes
-        </div>
-      </div>
-
-      {/* ── Optimiseur fournisseur ──────────────────────────────────── */}
-      <div className="mc-card" style={{ padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
-          <div>
-            <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
-              Optimiseur fournisseur
-            </h3>
-            <div style={{ fontSize: 12, color: palette.inkSoft, maxWidth: 560 }}>
-              Pour chaque article acheté chez plusieurs fournisseurs, économie potentielle si tout avait été acheté au prix le plus bas. Un repère de négociation, pas une cible absolue — un fournisseur ne suit pas toujours sur les gros volumes.
-            </div>
-          </div>
-          <SegmentedToggle
-            size="sm"
-            value={optimizerPeriod}
-            onChange={setOptimizerPeriod}
-            options={[
-              { id: '3',   label: '3 m' },
-              { id: '6',   label: '6 m' },
-              { id: '12',  label: '12 m' },
-              { id: 'all', label: 'Tout' },
-            ]}
-          />
-        </div>
-
-        {optimizerData.rows.length === 0 ? (
-          <EmptyState
-            icon={TrendingUp}
-            title="Pas d'écart détecté"
-            description={`Sur ${OPTIMIZER_PERIOD_LABELS[optimizerPeriod]}, aucun article n'a été acheté chez plusieurs fournisseurs à des prix différents. L'optimiseur a besoin d'achats comparables pour fonctionner.`}
-          />
-        ) : (
-          <>
-            {/* Bandeau récapitulatif */}
-            <div style={{
-              display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'baseline',
-              padding: '14px 18px', marginBottom: 16,
-              background: palette.sage + '12', border: `1px solid ${palette.sage}30`, borderRadius: 8,
-            }}>
-              <div>
-                <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>Économie potentielle</div>
-                <div className="mc-display" style={{ fontSize: 30, fontWeight: 700, color: palette.sage }}>
-                  {formatEuro(optimizerData.totalSaving)}
-                </div>
-              </div>
-              <div style={{ fontSize: 13, color: palette.inkSoft }}>
-                sur <strong>{optimizerData.rows.length}</strong> article{optimizerData.rows.length > 1 ? 's' : ''} multi-fournisseurs ·
-                {' '}soit <strong>{optimizerData.totalActual > 0 ? ((optimizerData.totalSaving / optimizerData.totalActual) * 100).toFixed(1) : '0'} %</strong> de ces achats
-              </div>
-            </div>
-
-            {/* Liste des opportunités */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {optimizerData.rows.slice(0, 15).map((row) => (
-                <div key={row.id} style={{ border: `1px solid ${palette.rule}`, borderRadius: 8, padding: 14 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
-                    <div style={{ fontWeight: 600, fontSize: 15 }}>{row.name}</div>
-                    <div style={{ display: 'flex', gap: 16, alignItems: 'baseline' }}>
-                      <span style={{ fontSize: 12, color: palette.inkSoft }}>
-                        {row.totalQty.toFixed(0)} {row.unit} · dépensé {formatEuro(row.actualSpend)}
-                      </span>
-                      <span className="mc-display" style={{ fontSize: 18, fontWeight: 700, color: palette.sage }}>
-                        −{formatEuro(row.saving)}
-                      </span>
-                    </div>
-                  </div>
-                  {/* Prix par fournisseur */}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {row.prices.map((p, i) => (
-                      <span key={p.supplier} style={{
-                        fontSize: 12, padding: '3px 10px', borderRadius: 12,
-                        background: i === 0 ? palette.sage + '20' : palette.paper,
-                        color: i === 0 ? palette.sage : palette.inkSoft,
-                        fontWeight: i === 0 ? 600 : 400,
-                        border: i === 0 ? `1px solid ${palette.sage}40` : `1px solid ${palette.rule}`,
-                      }}>
-                        {i === 0 ? '✓ ' : ''}{p.supplier} · {formatEuro(p.price)}/{row.unit}
-                        {p.qty > 0 && <span style={{ opacity: 0.7 }}> ({p.qty.toFixed(0)})</span>}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              {optimizerData.rows.length > 15 && (
-                <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic', textAlign: 'center' }}>
-                  + {optimizerData.rows.length - 15} autres articles avec un écart plus faible
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* ── Évolution du prix moyen par article ─────────────────────── */}
-      <div className="mc-card" style={{ padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
-          <div>
-            <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
-              Évolution du prix moyen
-            </h3>
-            <div style={{ fontSize: 12, color: palette.inkSoft }}>
-              Prix moyen pondéré par mois, toutes variantes et fournisseurs confondus
-            </div>
-          </div>
-          {articlesByPurchaseCount.length > 0 && (
-            <ArticleSearchSelect
-              options={articlesByPurchaseCount}
-              value={selectedArticleId}
-              onChange={setSelectedArticleId}
-            />
-          )}
-        </div>
-
-        {articlesByPurchaseCount.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 48, color: palette.inkSoft }}>
-            Aucun achat enregistré. Importez des factures pour voir l'évolution des prix.
-          </div>
-        ) : priceEvolution.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 48, color: palette.inkSoft }}>
-            Pas encore de données pour cet article.
-          </div>
-        ) : priceEvolution.length === 1 ? (
-          <div style={{ textAlign: 'center', padding: 32 }}>
-            <div style={{ fontSize: 28, fontWeight: 600, fontFamily: 'Fraunces, serif', color: palette.ink }}>
-              {formatEuro(priceEvolution[0].avg)}<span style={{ fontSize: 14, color: palette.inkSoft }}>/{selectedArticle?.unit}</span>
-            </div>
-            <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 4 }}>
-              Un seul mois d'achats ({priceEvolution[0].month}, {priceEvolution[0].count} facture{priceEvolution[0].count > 1 ? 's' : ''}) — pas encore d'évolution à tracer.
-            </div>
-          </div>
-        ) : (
-          <>
-            {priceEvolutionSummary && (
-              <div style={{ display: 'flex', gap: 24, marginBottom: 16, flexWrap: 'wrap', fontSize: 13 }}>
-                <div>
-                  <span style={{ color: palette.inkSoft }}>Premier mois : </span>
-                  <strong>{formatEuro(priceEvolutionSummary.first)}/{selectedArticle?.unit}</strong>
-                </div>
-                <div>
-                  <span style={{ color: palette.inkSoft }}>Dernier mois : </span>
-                  <strong>{formatEuro(priceEvolutionSummary.last)}/{selectedArticle?.unit}</strong>
-                </div>
-                <div>
-                  <span style={{ color: palette.inkSoft }}>Évolution : </span>
-                  <strong style={{ color: priceEvolutionSummary.pct > 5 ? palette.wine : priceEvolutionSummary.pct < -5 ? palette.sage : palette.ink, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    {priceEvolutionSummary.pct > 0 ? '+' : ''}{priceEvolutionSummary.pct.toFixed(1)} %
-                    {priceEvolutionSummary.pct > 5 && <ArrowUpRight size={14} />}
-                    {priceEvolutionSummary.pct < -5 && <ArrowDownRight size={14} />}
-                  </strong>
-                </div>
-              </div>
-            )}
-            <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={priceEvolution} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke={palette.rule} strokeDasharray="3 3" vertical={false} />
-                <XAxis
-                  dataKey="month"
-                  stroke={palette.inkSoft}
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(m) => {
-                    // "2026-01" → "janv. 26"
-                    const [y, mo] = m.split('-');
-                    const months = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
-                    return `${months[parseInt(mo, 10) - 1] || mo} ${y.slice(2)}`;
-                  }}
-                />
-                <YAxis
-                  stroke={palette.inkSoft}
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(v) => `${v.toFixed(v < 10 ? 2 : 0)} €`}
-                  domain={['auto', 'auto']}
-                />
-                <Tooltip
-                  contentStyle={{ background: palette.cream, border: `1px solid ${palette.rule}`, borderRadius: 6, fontSize: 12 }}
-                  formatter={(value, name) => {
-                    if (name === 'Prix moyen') return [`${formatEuro(value)}/${selectedArticle?.unit}`, name];
-                    if (name === 'Quantité') return [`${value.toFixed(2)} ${selectedArticle?.unit}`, name];
-                    return [value, name];
-                  }}
-                  labelFormatter={(m) => {
-                    const [y, mo] = m.split('-');
-                    const months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-                    return `${months[parseInt(mo, 10) - 1] || mo} ${y}`;
-                  }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="avg"
-                  name="Prix moyen"
-                  stroke={palette.wine}
-                  strokeWidth={2.5}
-                  dot={{ fill: palette.wine, r: 4 }}
-                  activeDot={{ r: 6 }}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </>
-        )}
-      </div>
-
-      <div className="mc-card" style={{ padding: 20 }}>
-        <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
-          Achats par catégorie
-        </h3>
-        <div style={{ fontSize: 12, color: palette.inkSoft, marginBottom: 16 }}>
-          Répartition des dépenses sur la période sélectionnée
-        </div>
-        {spendByCategory.length > 0 ? (() => {
-          const sorted = [...spendByCategory].sort((a, b) => b.value - a.value);
-          const total = sorted.reduce((s, c) => s + c.value, 0);
-          const withColor = sorted.map((c, i) => ({ ...c, color: chartColors[i % chartColors.length] }));
-          return (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : 'minmax(220px, 280px) 1fr',
-              gap: 24,
-              alignItems: 'center',
-            }}>
-              {/* Donut avec total au centre */}
-              <div style={{ position: 'relative', width: '100%', minHeight: 240 }}>
-                <ResponsiveContainer width="100%" height={240}>
-                  <PieChart>
-                    <Pie
-                      data={withColor}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={70}
-                      outerRadius={105}
-                      paddingAngle={2}
-                      stroke="none"
-                    >
-                      {withColor.map((c) => <Cell key={c.name} fill={c.color} />)}
-                    </Pie>
-                    <Tooltip
-                      formatter={(v) => formatEuro(v)}
-                      contentStyle={{ background: palette.cream, border: `1px solid ${palette.rule}`, borderRadius: 6, fontSize: 12 }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-                {/* Total au centre */}
-                <div style={{
-                  position: 'absolute', top: '50%', left: '50%',
-                  transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none',
-                }}>
-                  <div style={{ fontSize: 10, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: 0.5 }}>Total</div>
-                  <div className="mc-display" style={{ fontSize: 22, fontWeight: 700, color: palette.ink, lineHeight: 1.1 }}>
-                    {formatEuro(total)}
-                  </div>
-                  <div style={{ fontSize: 10, color: palette.inkSoft }}>{sorted.length} catégories</div>
-                </div>
-              </div>
-
-              {/* Légende riche : pastille + nom + montant + % + mini-barre */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {withColor.map((cat) => {
-                  const pct = total > 0 ? (cat.value / total) * 100 : 0;
-                  return (
-                    <div key={cat.name}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 13, marginBottom: 4, gap: 8 }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                          <span style={{ width: 11, height: 11, borderRadius: 3, background: cat.color, flexShrink: 0 }} />
-                          <span style={{ color: palette.ink, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat.name}</span>
-                        </span>
-                        <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, flexShrink: 0 }}>
-                          {formatEuro(cat.value)}
-                          <span style={{ fontWeight: 400, color: palette.inkSoft, fontSize: 11, marginLeft: 6 }}>{pct.toFixed(1)} %</span>
-                        </span>
-                      </div>
-                      <div style={{ height: 5, background: palette.paper, borderRadius: 3, overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: cat.color, borderRadius: 3, transition: 'width 0.3s ease' }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })() : (
-          <div style={{ textAlign: 'center', padding: 48, color: palette.inkSoft }}>
-            Aucun achat sur la période sélectionnée.
-          </div>
-        )}
-      </div>
+    <div className="mc-print-zone" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <PrintHeader title="Carte" dateFrom={dateFrom} dateTo={dateTo} />
+      <PilotageHeader title="Carte" subtitle="Rentabilité des plats et écarts entre achats et ventes, sur la période sélectionnée" />
 
       {/* ── Classement de la carte (menu engineering) ───────────────── */}
       <div className="mc-card" style={{ overflow: 'hidden' }}>
@@ -19995,7 +20361,7 @@ function EquipmentInventoryEditor({ equipment, onSave, onCancel }) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   REPORT VIEW + JSON BACKUP EXPORT
+//   JSON BACKUP EXPORT
 // ═══════════════════════════════════════════════════════════════════════════
 
 function downloadJSON(data, filename) {
@@ -20022,824 +20388,6 @@ function exportFullBackup(context) {
   };
   downloadJSON(backup, `latambouille-backup-${today}.json`);
   mcToast.success('Sauvegarde téléchargée');
-}
-
-function ReportView({ context }) {
-  const { purchases, energy, equipment, equipmentPurchases, assetMaintenance,
-          assetInterventions, alertsIndex, articles } = context;
-  const isMobile = useIsMobile(720);
-
-  const now = new Date();
-  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const firstOfMonth = currentMonthKey + '-01';
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const [reportFrom, setReportFrom] = useState(firstOfMonth);
-  const [reportTo, setReportTo] = useState(today);
-  const [articleSearch, setArticleSearch] = useState('');
-  const [showVariantSim, setShowVariantSim] = useState(false);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-
-  // Previous period (same duration, just before)
-  const prevPeriod = useMemo(() => {
-    if (!reportFrom || !reportTo) return { from: '', to: '' };
-    const from = new Date(reportFrom);
-    const to = new Date(reportTo);
-    const durationMs = to - from;
-    const prevTo = new Date(from - 1);
-    const prevFrom = new Date(prevTo - durationMs);
-    return {
-      from: prevFrom.toISOString().slice(0, 10),
-      to: prevTo.toISOString().slice(0, 10),
-    };
-  }, [reportFrom, reportTo]);
-
-  const monthPurchases = useMemo(() =>
-    purchases.filter((p) => {
-      const d = p.date || '';
-      return (!reportFrom || d >= reportFrom) && (!reportTo || d <= reportTo);
-    }),
-  [purchases, reportFrom, reportTo]);
-
-  const prevMonthPurchases = useMemo(() =>
-    purchases.filter((p) => {
-      const d = p.date || '';
-      return d >= prevPeriod.from && d <= prevPeriod.to;
-    }),
-  [purchases, prevPeriod]);
-
-  // Top 5 most purchased articles (by total €)
-  const top5Purchased = useMemo(() => {
-    const byArticle = {};
-    for (const p of monthPurchases) {
-      for (const item of (p.items || [])) {
-        if (!item.articleId || !item.total) continue;
-        byArticle[item.articleId] = (byArticle[item.articleId] || 0) + item.total;
-      }
-    }
-    return Object.entries(byArticle)
-      .map(([id, total]) => ({ article: articles.find((a) => a.id === id), total }))
-      .filter((e) => e.article)
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 5);
-  }, [monthPurchases, articles]);
-
-  // Top 5 price increases vs previous month
-  const top5PriceIncreases = useMemo(() => {
-    const avgFor = (ps) => {
-      const map = {};
-      for (const p of ps) {
-        for (const item of (p.items || [])) {
-          if (!item.articleId || !(item.pricePerMasterUnit > 0) || !(item.convertedQty > 0)) continue;
-          if (!map[item.articleId]) map[item.articleId] = { totalValue: 0, totalQty: 0 };
-          map[item.articleId].totalValue += item.pricePerMasterUnit * item.convertedQty;
-          map[item.articleId].totalQty += item.convertedQty;
-        }
-      }
-      return Object.fromEntries(
-        Object.entries(map).map(([id, v]) => [id, v.totalQty > 0 ? v.totalValue / v.totalQty : 0])
-      );
-    };
-    const curr = avgFor(monthPurchases);
-    const prev = avgFor(prevMonthPurchases);
-    const increases = [];
-    for (const [id, currAvg] of Object.entries(curr)) {
-      if (!prev[id] || !(prev[id] > 0)) continue;
-      const pct = ((currAvg - prev[id]) / prev[id]) * 100;
-      if (pct > 0) {
-        const article = articles.find((a) => a.id === id);
-        if (article) increases.push({ article, pct, currAvg, prevAvg: prev[id] });
-      }
-    }
-    return increases.sort((a, b) => b.pct - a.pct).slice(0, 5);
-  }, [monthPurchases, prevMonthPurchases, articles]);
-
-  // Active alerts
-  const activeAlerts = alertsIndex.slice(0, 8);
-
-  // Month label
-  const monthLabel = (key) => {
-    const [y, m] = key.split('-');
-    const months = ['Janvier','Février','Mars','Avril','Mai','Juin',
-                    'Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-    return `${months[parseInt(m, 10) - 1]} ${y}`;
-  };
-
-  // All articles stats for the period
-  const articleStats = useMemo(() => {
-    const map = {};
-    for (const p of monthPurchases) {
-      for (const item of (p.items || [])) {
-        if (!item.articleId || !(item.convertedQty > 0)) continue;
-        if (!map[item.articleId]) map[item.articleId] = { totalQty: 0, totalAmount: 0, orderCount: 0 };
-        map[item.articleId].totalQty += item.convertedQty;
-        map[item.articleId].totalAmount += item.total || 0;
-        map[item.articleId].orderCount += 1;
-      }
-    }
-    return Object.entries(map)
-      .map(([id, stats]) => ({ article: articles.find((a) => a.id === id), ...stats }))
-      .filter((e) => e.article)
-      .sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [monthPurchases, articles]);
-
-  const filteredArticleStats = useMemo(() => {
-    if (!articleSearch.trim()) return articleStats;
-    const q = articleSearch.toLowerCase();
-    return articleStats.filter((e) => e.article.name.toLowerCase().includes(q));
-  }, [articleStats, articleSearch]);
-
-  // Variant simulation: what if everything bought at cheapest variant price?
-  const variantSimulation = useMemo(() => {
-    const byArticle = {};
-    for (const p of monthPurchases) {
-      for (const item of (p.items || [])) {
-        if (!item.articleId || !(item.convertedQty > 0) || !(item.total > 0)) continue;
-        if (!byArticle[item.articleId]) byArticle[item.articleId] = {};
-        const varId = item.variantId || '__unknown__';
-        if (!byArticle[item.articleId][varId]) byArticle[item.articleId][varId] = { totalQty: 0, totalAmount: 0 };
-        byArticle[item.articleId][varId].totalQty += item.convertedQty;
-        byArticle[item.articleId][varId].totalAmount += item.total;
-      }
-    }
-    const results = [];
-    for (const [artId, varMap] of Object.entries(byArticle)) {
-      const art = articles.find((a) => a.id === artId);
-      if (!art || (art.variants || []).length < 2) continue;
-      const variantEntries = Object.entries(varMap).map(([varId, d]) => {
-        const variant = (art.variants || []).find((v) => v.id === varId);
-        const avgPrice = d.totalQty > 0 ? d.totalAmount / d.totalQty : 0;
-        return { variantId: varId, variantName: variant?.name || 'Variante inconnue', totalQty: d.totalQty, totalAmount: d.totalAmount, avgPrice };
-      }).filter((v) => v.avgPrice > 0).sort((a, b) => a.avgPrice - b.avgPrice);
-      if (variantEntries.length < 2) continue;
-      const totalQtyBought = variantEntries.reduce((s, v) => s + v.totalQty, 0);
-      const totalActualSpend = variantEntries.reduce((s, v) => s + v.totalAmount, 0);
-      const cheapest = variantEntries[0];
-      const hypotheticalSpend = totalQtyBought * cheapest.avgPrice;
-      const potentialSavings = totalActualSpend - hypotheticalSpend;
-      if (potentialSavings < 0.5) continue;
-      results.push({ article: art, variantEntries, totalQtyBought, totalActualSpend, cheapest, hypotheticalSpend, potentialSavings });
-    }
-    return results.sort((a, b) => b.potentialSavings - a.potentialSavings);
-  }, [monthPurchases, articles]);
-
-  // Savings suggestions (rule-based, on-demand)
-  const savingsSuggestions = useMemo(() => {
-    const suggestions = [];
-    const artSupplierMap = {};
-    for (const p of monthPurchases) {
-      const sup = (p.supplier || '').trim();
-      if (!sup) continue;
-      for (const item of (p.items || [])) {
-        if (!item.articleId || !(item.pricePerMasterUnit > 0) || !(item.convertedQty > 0)) continue;
-        if (!artSupplierMap[item.articleId]) artSupplierMap[item.articleId] = {};
-        if (!artSupplierMap[item.articleId][sup]) artSupplierMap[item.articleId][sup] = { tv: 0, tq: 0 };
-        artSupplierMap[item.articleId][sup].tv += item.pricePerMasterUnit * item.convertedQty;
-        artSupplierMap[item.articleId][sup].tq += item.convertedQty;
-      }
-    }
-    for (const [artId, supMap] of Object.entries(artSupplierMap)) {
-      const art = articles.find((a) => a.id === artId);
-      if (!art) continue;
-      const sups = Object.entries(supMap)
-        .map(([name, d]) => ({ name, avg: d.tq > 0 ? d.tv / d.tq : 0, qty: d.tq }))
-        .filter((s) => s.avg > 0).sort((a, b) => a.avg - b.avg);
-      if (sups.length < 2) continue;
-      const cheapest = sups[0];
-      const dearest = sups[sups.length - 1];
-      const gapPct = ((dearest.avg - cheapest.avg) / cheapest.avg) * 100;
-      if (gapPct < 15) continue;
-      const saving = dearest.qty * (dearest.avg - cheapest.avg);
-      if (saving < 1) continue;
-      suggestions.push({ type: 'supplier_gap', priority: saving, article: art, cheapest, dearest, gapPct, saving,
-        label: 'Écart fournisseur',
-        detail: `${art.name} : ${dearest.name} à ${formatEuro(dearest.avg)}/${art.unit} vs ${cheapest.name} à ${formatEuro(cheapest.avg)}/${art.unit} (+${gapPct.toFixed(0)}%)`,
-        action: `Privilégier ${cheapest.name} → économie estimée ${formatEuro(saving)} sur la période`,
-      });
-    }
-    const avgFor = (ps) => {
-      const map = {};
-      for (const p of ps) for (const item of (p.items || [])) {
-        if (!item.articleId || !(item.pricePerMasterUnit > 0) || !(item.convertedQty > 0)) continue;
-        if (!map[item.articleId]) map[item.articleId] = { tv: 0, tq: 0 };
-        map[item.articleId].tv += item.pricePerMasterUnit * item.convertedQty;
-        map[item.articleId].tq += item.convertedQty;
-      }
-      return Object.fromEntries(Object.entries(map).map(([id, v]) => [id, v.tq > 0 ? v.tv / v.tq : 0]));
-    };
-    const currAvgs = avgFor(monthPurchases);
-    const prevAvgs = avgFor(prevMonthPurchases);
-    for (const [artId, currAvg] of Object.entries(currAvgs)) {
-      const prevAvg = prevAvgs[artId];
-      if (!prevAvg || prevAvg <= 0) continue;
-      const pct = ((currAvg - prevAvg) / prevAvg) * 100;
-      if (pct < 10) continue;
-      const art = articles.find((a) => a.id === artId);
-      if (!art) continue;
-      const artStat = articleStats.find((s) => s.article.id === artId);
-      const extraCost = artStat ? artStat.totalQty * (currAvg - prevAvg) : 0;
-      if (extraCost < 1) continue;
-      suggestions.push({ type: 'price_increase', priority: extraCost, article: art, currAvg, prevAvg, pct, extraCost,
-        label: 'Hausse de prix',
-        detail: `${art.name} : +${pct.toFixed(0)}% vs période précédente (${formatEuro(prevAvg)} → ${formatEuro(currAvg)}/${art.unit})`,
-        action: `Surcoût estimé ${formatEuro(extraCost)} — négocier ou comparer les fournisseurs`,
-      });
-    }
-    return suggestions.sort((a, b) => b.priority - a.priority);
-  }, [monthPurchases, prevMonthPurchases, articles, articleStats]);
-
-  const totalMonth = monthPurchases.reduce((s, p) => s + (p.total || 0), 0);
-  const totalPrev = prevMonthPurchases.reduce((s, p) => s + (p.total || 0), 0);
-  const totalEvol = totalPrev > 0 ? ((totalMonth - totalPrev) / totalPrev) * 100 : null;
-
-  // ─── Coûts d'exploitation complets : énergie + équipement sur la période ──
-  const operatingCosts = useMemo(() => {
-    const inPeriod = (d) => d && (!reportFrom || d >= reportFrom) && (!reportTo || d <= reportTo);
-    const inPrev = (d) => d && d >= prevPeriod.from && d <= prevPeriod.to;
-
-    const sum = (list, dateField, totalFn) => {
-      let curr = 0, prev = 0;
-      for (const item of (list || [])) {
-        const d = item[dateField] || '';
-        const v = totalFn(item);
-        if (inPeriod(d)) curr += v;
-        else if (inPrev(d)) prev += v;
-      }
-      return { curr, prev };
-    };
-
-    const energyCosts = sum(energy, 'date', (e) => e.totalTTC || e.totalHT || 0);
-    const equipPurch = sum(equipmentPurchases, 'date', (e) => e.total || 0);
-    const interventions = sum(assetInterventions, 'date', (e) => e.cost || 0);
-
-    // Contrats d'entretien : coût annualisé prorata de la durée de la période
-    const periodDays = Math.max(1, daysBetween(reportFrom, reportTo) + 1);
-    let maintenanceCurr = 0;
-    for (const m of (assetMaintenance || [])) {
-      const perYear = (CONTRACT_FREQUENCIES.find((f) => f.id === m.frequency)?.perYear || 0);
-      const annualCost = (m.cost || 0) * perYear;
-      maintenanceCurr += (annualCost / 365) * periodDays;
-    }
-
-    const equipmentTotal = equipPurch.curr + interventions.curr + maintenanceCurr;
-    const grandTotal = totalMonth + energyCosts.curr + equipmentTotal;
-
-    return {
-      energy: energyCosts,
-      equipPurchases: equipPurch,
-      interventions,
-      maintenanceProrata: maintenanceCurr,
-      equipmentTotal,
-      grandTotal,
-    };
-  }, [energy, equipmentPurchases, assetInterventions, assetMaintenance, reportFrom, reportTo, prevPeriod, totalMonth]);
-
-  // ─── Répartition par fournisseur (achats de la période) ──────────────────
-  const supplierBreakdown = useMemo(() => {
-    const map = {};
-    for (const p of monthPurchases) {
-      const sup = (p.supplier || 'Inconnu').trim() || 'Inconnu';
-      map[sup] = (map[sup] || 0) + (p.total || 0);
-    }
-    return Object.entries(map)
-      .map(([name, total]) => ({ name, total }))
-      .sort((a, b) => b.total - a.total);
-  }, [monthPurchases]);
-
-  // ─── Répartition par catégorie d'article ────────────────────────────────
-  const categoryBreakdown = useMemo(() => {
-    const map = {};
-    for (const p of monthPurchases) {
-      for (const item of (p.items || [])) {
-        if (!item.articleId || !(item.total > 0)) continue;
-        const art = articles.find((a) => a.id === item.articleId);
-        const cat = art?.category || 'À trier';
-        map[cat] = (map[cat] || 0) + item.total;
-      }
-    }
-    return Object.entries(map)
-      .map(([name, total]) => ({ name, total }))
-      .sort((a, b) => b.total - a.total);
-  }, [monthPurchases, articles]);
-
-  return (
-    <div className="mc-print-zone" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-
-      {/* En-tête visible uniquement à l'impression */}
-      <div className="mc-print-header" style={{ marginBottom: 8 }}>
-        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 26, fontWeight: 700, color: palette.wine }}>
-          Le Point de Vue
-        </div>
-        <div style={{ fontSize: 14, color: palette.inkSoft, marginTop: 2 }}>
-          Rapport d'exploitation · du {formatShortDate(reportFrom, { withYear: true })} au {formatShortDate(reportTo, { withYear: true })}
-        </div>
-        <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2 }}>
-          Édité le {formatShortDate(today, { withYear: true })} · La Tambouille
-        </div>
-      </div>
-
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h2 className="mc-display" style={{ fontSize: isMobile ? 20 : 24, fontWeight: 600, margin: 0 }}>Rapport</h2>
-          <div style={{ fontSize: 13, color: palette.inkSoft, marginTop: 4 }}>
-            Le Point de Vue · du {formatShortDate(reportFrom, { withYear: true })} au {formatShortDate(reportTo, { withYear: true })}
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
-            <span style={{ color: palette.inkSoft }}>Du</span>
-            <input
-              type="date"
-              value={reportFrom}
-              onChange={(e) => setReportFrom(e.target.value)}
-              style={{ padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }}
-            />
-            <span style={{ color: palette.inkSoft }}>au</span>
-            <input
-              type="date"
-              value={reportTo}
-              onChange={(e) => setReportTo(e.target.value)}
-              style={{ padding: '7px 10px', border: `1px solid ${palette.rule}`, borderRadius: 6, background: palette.cream, fontFamily: 'inherit', fontSize: 13 }}
-            />
-            <div style={{ display: 'flex', gap: 4 }}>
-              <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
-                onClick={() => { setReportFrom(currentMonthKey + '-01'); setReportTo(today); }}>
-                Ce mois
-              </button>
-              <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
-                onClick={() => {
-                  const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-                  setReportFrom(d.toISOString().slice(0, 10));
-                  setReportTo(new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10));
-                }}>
-                Mois préc.
-              </button>
-              <button className="mc-btn mc-btn-ghost" style={{ fontSize: 11, padding: '4px 8px' }}
-                onClick={() => { setReportFrom(now.getFullYear() + '-01-01'); setReportTo(today); }}>
-                Cette année
-              </button>
-            </div>
-          </div>
-          <button
-            className="mc-btn mc-btn-ghost"
-            onClick={() => window.print()}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 13 }}
-          >
-            <Download size={14} /> Exporter PDF
-          </button>
-          <button
-            className="mc-btn mc-btn-ghost"
-            onClick={() => exportFullBackup(context)}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 13, color: palette.sage }}
-          >
-            <Download size={14} /> Sauvegarde JSON
-          </button>
-        </div>
-      </div>
-
-      {/* Coûts d'exploitation : total + détail par poste */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <KpiCard
-          variant="hero"
-          label="Coût d'exploitation total"
-          value={formatEuro(operatingCosts.grandTotal)}
-          accentColor={palette.wine}
-          sub={`Achats ${formatEuro(totalMonth)} · Énergie ${formatEuro(operatingCosts.energy.curr)} · Équipement ${formatEuro(operatingCosts.equipmentTotal)}`}
-        />
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(170px, 1fr))',
-          gap: isMobile ? 10 : 12,
-        }}>
-          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
-            <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Achats</div>
-            <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: isMobile ? 20 : 26, color: palette.ink }}>{formatEuro(totalMonth)}</div>
-            {totalEvol !== null && (
-              <div style={{ fontSize: 12, marginTop: 6, color: totalEvol > 10 ? palette.wine : totalEvol > 0 ? palette.amber : palette.sage, display: 'flex', alignItems: 'center', gap: 4 }}>
-                {totalEvol > 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-                {totalEvol > 0 ? '+' : ''}{totalEvol.toFixed(1)}% vs préc.
-              </div>
-            )}
-          </div>
-          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
-            <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Énergie</div>
-            <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: isMobile ? 20 : 26, color: palette.ink }}>{formatEuro(operatingCosts.energy.curr)}</div>
-            {operatingCosts.energy.prev > 0 && (
-              <div style={{ fontSize: 12, marginTop: 6, color: palette.inkSoft }}>
-                vs {formatEuro(operatingCosts.energy.prev)} préc.
-              </div>
-            )}
-          </div>
-          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
-            <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Équipement</div>
-            <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: isMobile ? 20 : 26, color: palette.ink }}>{formatEuro(operatingCosts.equipmentTotal)}</div>
-            <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 6 }}>
-              dont entretien {formatEuro(operatingCosts.maintenanceProrata)} (prorata)
-            </div>
-          </div>
-          <div className="mc-card" style={{ padding: isMobile ? 14 : 20 }}>
-            <div style={{ fontSize: 11, color: palette.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Factures · Alertes</div>
-            <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: isMobile ? 20 : 26, color: palette.ink }}>
-              {monthPurchases.length}
-              <span style={{ fontSize: 14, color: alertsIndex.length > 0 ? palette.wine : palette.sage, marginLeft: 8 }}>
-                · {alertsIndex.length} alertes
-              </span>
-            </div>
-            <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 6 }}>
-              {[...new Set(monthPurchases.map((p) => p.supplier).filter(Boolean))].length} fournisseur(s)
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Répartition par fournisseur et par catégorie */}
-      {(supplierBreakdown.length > 0 || categoryBreakdown.length > 0) && (
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
-          <div className="mc-card" style={{ padding: 20 }}>
-            <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Répartition par fournisseur</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {supplierBreakdown.slice(0, 8).map(({ name, total }) => {
-                const pct = totalMonth > 0 ? (total / totalMonth) * 100 : 0;
-                return (
-                  <div key={name}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-                      <span style={{ color: palette.ink }}>{name}</span>
-                      <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
-                        {formatEuro(total)} <span style={{ fontWeight: 400, color: palette.inkSoft, fontSize: 11 }}>({pct.toFixed(0)}%)</span>
-                      </span>
-                    </div>
-                    <div style={{ height: 6, background: palette.paper, borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: palette.wine, borderRadius: 3 }} />
-                    </div>
-                  </div>
-                );
-              })}
-              {supplierBreakdown.length > 8 && (
-                <div style={{ fontSize: 11, color: palette.inkSoft, fontStyle: 'italic' }}>
-                  + {supplierBreakdown.length - 8} autres fournisseurs
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="mc-card" style={{ padding: 20 }}>
-            <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Répartition par catégorie</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {categoryBreakdown.slice(0, 8).map(({ name, total }) => {
-                const pct = totalMonth > 0 ? (total / totalMonth) * 100 : 0;
-                return (
-                  <div key={name}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-                      <span style={{ color: palette.ink }}>{name}</span>
-                      <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
-                        {formatEuro(total)} <span style={{ fontWeight: 400, color: palette.inkSoft, fontSize: 11 }}>({pct.toFixed(0)}%)</span>
-                      </span>
-                    </div>
-                    <div style={{ height: 6, background: palette.paper, borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: palette.sage, borderRadius: 3 }} />
-                    </div>
-                  </div>
-                );
-              })}
-              {categoryBreakdown.length > 8 && (
-                <div style={{ fontSize: 11, color: palette.inkSoft, fontStyle: 'italic' }}>
-                  + {categoryBreakdown.length - 8} autres catégories
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 2 columns */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
-
-        {/* Top 5 most purchased */}
-        <div className="mc-card" style={{ padding: 20 }}>
-          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Top 5 articles achetés</h3>
-          {top5Purchased.length === 0 ? (
-            <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>Aucun achat ce mois-ci.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {top5Purchased.map(({ article, total }, i) => {
-                const maxTotal = top5Purchased[0].total;
-                return (
-                  <div key={article.id}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-                      <span style={{ color: palette.ink, fontWeight: i === 0 ? 600 : 400 }}>{article.name}</span>
-                      <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>{formatEuro(total)}</span>
-                    </div>
-                    <div style={{ height: 4, background: palette.rule, borderRadius: 2 }}>
-                      <div style={{ height: 4, width: `${(total / maxTotal) * 100}%`, background: palette.wine, borderRadius: 2, transition: 'width 400ms ease' }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Top 5 price increases */}
-        <div className="mc-card" style={{ padding: 20 }}>
-          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Top 5 hausses de prix</h3>
-          {top5PriceIncreases.length === 0 ? (
-            <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>
-              Pas de données comparatives{prevMonthPurchases.length === 0 ? ' (aucun achat sur la période précédente)' : ' sur cette période.'}.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {top5PriceIncreases.map(({ article, pct, currAvg, prevAvg }) => (
-                <div key={article.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
-                  <div>
-                    <div style={{ color: palette.ink }}>{article.name}</div>
-                    <div style={{ fontSize: 11, color: palette.inkSoft }}>
-                      {formatEuro(prevAvg)}/{article.unit} → {formatEuro(currAvg)}/{article.unit}
-                    </div>
-                  </div>
-                  <span style={{
-                    background: pct > 15 ? palette.wine + '20' : palette.amber + '20',
-                    color: pct > 15 ? palette.wine : palette.amber,
-                    fontWeight: 600, fontSize: 12,
-                    padding: '3px 8px', borderRadius: 4,
-                  }}>
-                    +{pct.toFixed(1)}%
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Active alerts */}
-      {activeAlerts.length > 0 && (
-        <div className="mc-card" style={{ padding: 20 }}>
-          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>Alertes actives</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {activeAlerts.map((alert, i) => {
-              const isStock = alert.type === ALERT_TYPES.STOCK_LOW || alert.type === ALERT_TYPES.STOCK_EMPTY;
-              const isPrice = alert.type === ALERT_TYPES.PRICE_TREND;
-              const isGap = alert.type === ALERT_TYPES.SUPPLIER_PRICE_GAP;
-              const color = alert.type === ALERT_TYPES.STOCK_EMPTY ? palette.wine : palette.amber;
-              const typeLabel = isStock ? 'Stock' : isPrice ? 'Prix' : isGap ? 'Écart fournisseur' : 'Alerte';
-              return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: i < activeAlerts.length - 1 ? `1px solid ${palette.rule}` : 'none' }}>
-                  <span style={{ background: color + '20', color, fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, minWidth: 80, textAlign: 'center' }}>
-                    {typeLabel}
-                  </span>
-                  <span style={{ fontSize: 13, color: palette.ink, flex: 1 }}>{alert.article?.name || '—'}</span>
-                  <span style={{ fontSize: 12, color: palette.inkSoft }}>{alert.article?.category || ''}</span>
-                </div>
-              );
-            })}
-            {alertsIndex.length > 8 && (
-              <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic', paddingTop: 8 }}>
-                + {alertsIndex.length - 8} autre(s) alerte(s) dans l'onglet Alertes
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Suggestions d'économies — on demand */}
-      <div style={{ borderRadius: 8, border: `1px solid ${palette.rule}`, overflow: 'hidden', marginBottom: 16 }}>
-        <button
-          className="mc-btn mc-btn-ghost"
-          onClick={() => setShowSuggestions((s) => !s)}
-          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', fontSize: 13, width: '100%', justifyContent: 'space-between', borderRadius: 0, border: 'none' }}
-        >
-          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <AlertCircle size={16} style={{ color: palette.amber }} />
-            <strong>Suggestions d'économies</strong>
-            {(savingsSuggestions.length > 0 || variantSimulation.length > 0) && (
-              <span className="mc-pill" style={{ background: palette.amber + '20', color: palette.amber, fontWeight: 600 }}>
-                {savingsSuggestions.length + (variantSimulation.length > 0 ? 1 : 0)} suggestion{savingsSuggestions.length + (variantSimulation.length > 0 ? 1 : 0) > 1 ? 's' : ''}
-              </span>
-            )}
-          </span>
-          <span style={{ color: palette.inkSoft, fontSize: 12 }}>{showSuggestions ? '▲ Masquer' : '▼ Voir les suggestions'}</span>
-        </button>
-        {showSuggestions && (
-          <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {savingsSuggestions.length === 0 && variantSimulation.length === 0 ? (
-              <div style={{ padding: '12px 0', fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>
-                Aucune suggestion détectée sur cette période.
-              </div>
-            ) : (
-              <>
-                {variantSimulation.length > 0 && (
-                  <div style={{ padding: '14px 16px', borderRadius: 8, background: palette.sage + '10', border: `1px solid ${palette.sage}30` }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: 13 }}>💰</span>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: palette.sage, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Variantes moins chères disponibles</span>
-                        </div>
-                        <div style={{ fontSize: 13, color: palette.ink, marginBottom: 4 }}>
-                          {variantSimulation.length} article{variantSimulation.length > 1 ? 's' : ''} acheté{variantSimulation.length > 1 ? 's' : ''} en plusieurs variantes à des prix différents.
-                        </div>
-                        <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic' }}>→ Voir la simulation par variante ci-dessous pour le détail</div>
-                      </div>
-                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                        <div style={{ fontSize: 10, color: palette.inkSoft }}>Impact estimé</div>
-                        <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 18, color: palette.sage }}>
-                          {formatEuro(variantSimulation.reduce((s, r) => s + r.potentialSavings, 0))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {savingsSuggestions.map((s, i) => {
-                  const cfg = s.type === 'supplier_gap'
-                    ? { color: palette.wine, icon: '🔁', bg: palette.wine + '10' }
-                    : { color: palette.amber, icon: '📈', bg: palette.amber + '10' };
-                  return (
-                    <div key={i} style={{ padding: '14px 16px', borderRadius: 8, background: cfg.bg, border: `1px solid ${cfg.color}30` }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                            <span style={{ fontSize: 13 }}>{cfg.icon}</span>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: cfg.color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</span>
-                          </div>
-                          <div style={{ fontSize: 13, color: palette.ink, marginBottom: 4 }}>{s.detail}</div>
-                          <div style={{ fontSize: 12, color: palette.inkSoft, fontStyle: 'italic' }}>→ {s.action}</div>
-                        </div>
-                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                          <div style={{ fontSize: 10, color: palette.inkSoft }}>Impact estimé</div>
-                          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 18, color: cfg.color }}>{formatEuro(s.priority)}</div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Simulation par variante — on demand */}
-      <div style={{ borderRadius: 8, border: `1px solid ${palette.rule}`, overflow: 'hidden', marginBottom: 16 }}>
-        <button
-          className="mc-btn mc-btn-ghost"
-          onClick={() => setShowVariantSim((s) => !s)}
-          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', fontSize: 13, width: '100%', justifyContent: 'space-between', borderRadius: 0, border: 'none' }}
-        >
-          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <TrendingUp size={16} style={{ color: palette.wine }} />
-            <strong>Simulation par variante</strong>
-            {variantSimulation.length > 0 && (
-              <span className="mc-pill" style={{ background: palette.sage + '20', color: palette.sage, fontWeight: 600 }}>
-                {variantSimulation.length} article{variantSimulation.length > 1 ? 's' : ''} · {formatEuro(variantSimulation.reduce((s, r) => s + r.potentialSavings, 0))} d'économie potentielle
-              </span>
-            )}
-          </span>
-          <span style={{ color: palette.inkSoft, fontSize: 12 }}>{showVariantSim ? '▲ Masquer' : '▼ Analyser mes variantes'}</span>
-        </button>
-        {showVariantSim && (
-          <div style={{ padding: '0 16px 16px' }}>
-            {variantSimulation.length === 0 ? (
-              <div style={{ padding: '12px 0', fontSize: 13, color: palette.inkSoft, fontStyle: 'italic' }}>
-                Aucun article acheté en plusieurs variantes sur cette période.
-              </div>
-            ) : (
-              <>
-                <div style={{ padding: '12px 0 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, color: palette.inkSoft }}>Économie totale potentielle sur la période</span>
-                  <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 20, color: palette.sage }}>
-                    {formatEuro(variantSimulation.reduce((s, r) => s + r.potentialSavings, 0))}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {variantSimulation.map(({ article, variantEntries, totalQtyBought, totalActualSpend, cheapest, hypotheticalSpend, potentialSavings }) => (
-                    <div key={article.id} style={{ border: `1px solid ${palette.rule}`, borderRadius: 8, overflow: 'hidden' }}>
-                      <div style={{ padding: '12px 16px', background: palette.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: 14 }}>{article.name}</div>
-                          <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2 }}>
-                            {totalQtyBought % 1 === 0 ? totalQtyBought : totalQtyBought.toFixed(2)} {article.unit} achetés · Dépensé réel : <strong>{formatEuro(totalActualSpend)}</strong>
-                          </div>
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: 11, color: palette.inkSoft }}>Économie potentielle</div>
-                          <div style={{ fontFamily: 'Fraunces, serif', fontWeight: 700, fontSize: 20, color: palette.sage }}>{formatEuro(potentialSavings)}</div>
-                          <div style={{ fontSize: 11, color: palette.inkSoft }}>Si tout acheté chez <em>{cheapest.variantName}</em></div>
-                        </div>
-                      </div>
-                      <div style={{ padding: '8px 0' }}>
-                        {variantEntries.map((v, idx) => {
-                          const isCheapest = idx === 0;
-                          const pctAbove = cheapest.avgPrice > 0 ? ((v.avgPrice - cheapest.avgPrice) / cheapest.avgPrice) * 100 : 0;
-                          const overspend = v.totalAmount - (v.totalQty * cheapest.avgPrice);
-                          return (
-                            <div key={v.variantId} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 8, padding: '8px 16px', borderBottom: idx < variantEntries.length - 1 ? `1px solid ${palette.rule}` : 'none', alignItems: 'center', fontSize: 13 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <span style={{ color: isCheapest ? palette.sage : palette.wine, fontSize: 14 }}>{isCheapest ? '↓' : '↑'}</span>
-                                <div>
-                                  <div style={{ fontWeight: isCheapest ? 600 : 400 }}>{v.variantName}</div>
-                                  {isCheapest && <div style={{ fontSize: 10, color: palette.sage, fontWeight: 600 }}>Moins chère</div>}
-                                </div>
-                              </div>
-                              <div style={{ textAlign: 'right', color: palette.inkSoft, fontSize: 12 }}>{v.totalQty % 1 === 0 ? v.totalQty : v.totalQty.toFixed(2)} {article.unit}</div>
-                              <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600, color: isCheapest ? palette.sage : palette.ink }}>{formatEuro(v.avgPrice)}/{article.unit}</div>
-                              <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif' }}>{formatEuro(v.totalAmount)}</div>
-                              <div style={{ textAlign: 'right' }}>
-                                {!isCheapest
-                                  ? <span style={{ background: palette.wine + '15', color: palette.wine, fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4 }}>+{formatEuro(overspend)} (+{pctAbove.toFixed(0)}%)</span>
-                                  : <span style={{ fontSize: 11, color: palette.sage }}>référence</span>}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div style={{ padding: '10px 16px', background: palette.sage + '08', borderTop: `1px solid ${palette.sage}30`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
-                        <span style={{ color: palette.inkSoft }}>Si tout acheté à <strong>{formatEuro(cheapest.avgPrice)}/{article.unit}</strong> ({cheapest.variantName}) :</span>
-                        <span style={{ fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
-                          {formatEuro(hypotheticalSpend)} <span style={{ color: palette.sage, marginLeft: 8 }}>(−{formatEuro(potentialSavings)})</span>
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Articles detail table */}
-      <div className="mc-card" style={{ padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-          <h3 className="mc-display" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
-            Achats par article — {reportFrom} → {reportTo}
-          </h3>
-          <div style={{ position: 'relative', minWidth: 240 }}>
-            <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: palette.inkSoft }} />
-            <input
-              type="text"
-              value={articleSearch}
-              onChange={(e) => setArticleSearch(e.target.value)}
-              placeholder="Rechercher un article…"
-              style={{
-                paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8,
-                border: `1px solid ${palette.rule}`, borderRadius: 6,
-                background: palette.cream, fontFamily: 'inherit', fontSize: 13,
-                width: '100%',
-              }}
-            />
-          </div>
-        </div>
-
-        {filteredArticleStats.length === 0 ? (
-          <div style={{ fontSize: 13, color: palette.inkSoft, fontStyle: 'italic', padding: '12px 0' }}>
-            {articleSearch ? 'Aucun article ne correspond à cette recherche.' : 'Aucun achat sur cette période.'}
-          </div>
-        ) : (
-          <>
-            <div style={{
-              display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr',
-              padding: '8px 0', fontSize: 11, fontWeight: 600, color: palette.inkSoft,
-              textTransform: 'uppercase', letterSpacing: '0.05em',
-              borderBottom: `1px solid ${palette.rule}`, marginBottom: 4,
-            }}>
-              <div>Article</div>
-              <div style={{ textAlign: 'right' }}>Qté achetée</div>
-              <div style={{ textAlign: 'right' }}>Montant HT</div>
-              <div style={{ textAlign: 'right' }}>Commandes</div>
-            </div>
-            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-              {filteredArticleStats.map(({ article, totalQty, totalAmount, orderCount }) => (
-                <div key={article.id} style={{
-                  display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr',
-                  padding: '10px 0', borderBottom: `1px solid ${palette.rule}`,
-                  fontSize: 13, alignItems: 'center',
-                }}>
-                  <div>
-                    <div style={{ fontWeight: 500, color: palette.ink }}>{article.name}</div>
-                    <div style={{ fontSize: 11, color: palette.inkSoft }}>{article.category}</div>
-                  </div>
-                  <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
-                    {totalQty % 1 === 0 ? totalQty : totalQty.toFixed(2)} {article.unit}
-                  </div>
-                  <div style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600 }}>
-                    {formatEuro(totalAmount)}
-                  </div>
-                  <div style={{ textAlign: 'right', color: palette.inkSoft }}>
-                    {orderCount} facture{orderCount > 1 ? 's' : ''}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{ fontSize: 12, color: palette.inkSoft, marginTop: 10, textAlign: 'right' }}>
-              {filteredArticleStats.length} article{filteredArticleStats.length > 1 ? 's' : ''} ·
-              Total : {formatEuro(filteredArticleStats.reduce((s, e) => s + e.totalAmount, 0))}
-            </div>
-          </>
-        )}
-      </div>
-
-
-    </div>
-  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -21606,326 +21154,6 @@ function EnergyInvoiceModal({ initial, onSave, onClose }) {
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//   SIMULATOR VIEW — "What if I only used this variant?"
-// ═══════════════════════════════════════════════════════════════════════════
-
-function SimulatorView({ context }) {
-  const { articles, recipes, purchases, sales, priceIndex, dateFrom, dateTo } = context;
-
-  // Only multi-variant articles are interesting to simulate
-  const multiVariantArticles = useMemo(
-    () => articles.filter((i) => (i.variants || []).length > 1),
-    [articles]
-  );
-
-  const [selectedArticleId, setSelectedArticleId] = useState(
-    multiVariantArticles[0]?.id || null
-  );
-
-  const selectedArticle = articles.find((i) => i.id === selectedArticleId);
-
-  // Compute per-variant prices for the selected article
-  const variantPrices = useMemo(() => {
-    if (!selectedArticle) return [];
-    return selectedArticle.variants.map((variant) => ({
-      ...variant,
-      avg: indexedVariantAveragePrice(priceIndex, selectedArticle.id, variant.id),
-    }));
-  }, [selectedArticle, priceIndex]);
-
-  // Reference: weighted average across all variants (current real-world cost)
-  const blendedAverage = useMemo(
-    () => (selectedArticle ? indexedAveragePrice(priceIndex, selectedArticle.id) : null),
-    [selectedArticle, priceIndex]
-  );
-
-  // Find the assortment base once for the simulator
-  const assortmentBase = useMemo(() => findAssortmentBase(recipes), [recipes]);
-
-  // A recipe is "affected" if:
-  //   - it directly uses the selected article, OR
-  //   - it includes the assortment AND the assortment uses the article
-  // The assortment base itself is excluded from the affected list — we don't
-  // simulate the base in isolation, since it isn't sold directly. Its impact
-  // is reflected in every plate that includes it.
-  const affectedRecipes = useMemo(() => {
-    if (!selectedArticle) return [];
-    const baseUsesArticle =
-      assortmentBase &&
-      (assortmentBase.articles || []).some((line) => line.id === selectedArticle.id);
-
-    return recipes.filter((r) => {
-      if (r.isAssortmentBase) return false;
-      const direct = (r.articles || []).some((line) => line.id === selectedArticle.id);
-      const viaAssortment = r.includesAssortment && baseUsesArticle;
-      return direct || viaAssortment;
-    });
-  }, [recipes, selectedArticle, assortmentBase]);
-
-  // For each affected recipe, simulate the plate cost using each variant.
-  // We use indexedPlateCostWithOverrides which applies the override BOTH to
-  // the recipe and to the assortment if relevant — this is what makes the
-  // simulator correctly model "change rice variant → impacts all plates".
-  const recipeSimulations = useMemo(() => {
-    if (!selectedArticle) return [];
-
-    return affectedRecipes.map((recipe) => {
-      const baselineCost = indexedPlateCost(recipe, priceIndex, assortmentBase).plateCost;
-      const baselineRatio = recipe.salePrice > 0 ? baselineCost / recipe.salePrice : 0;
-
-      const scenarios = variantPrices.map((variant) => {
-        const overrides = { [selectedArticle.id]: variant.avg };
-        const simCost = indexedPlateCostWithOverrides(recipe, priceIndex, assortmentBase, overrides).plateCost;
-        const simRatio = recipe.salePrice > 0 ? simCost / recipe.salePrice : 0;
-        const delta = simCost - baselineCost;
-        return { variant, simCost, simRatio, delta };
-      });
-
-      // Annual savings projection based on actual sales volume for this recipe
-      const recipeSales = sales.filter(
-        (s) => s.recipeId === recipe.id && saleInPeriod(s, dateFrom, dateTo)
-      );
-      const totalQtySold = recipeSales.reduce((sum, s) => sum + s.qty, 0);
-
-      return { recipe, baselineCost, baselineRatio, scenarios, totalQtySold };
-    });
-  }, [selectedArticle, affectedRecipes, variantPrices, priceIndex, assortmentBase, sales, dateFrom, dateTo]);
-
-  // Aggregate impact across all affected recipes (using actual sales volume)
-  const aggregateImpact = useMemo(() => {
-    return variantPrices.map((variant) => {
-      const totalDelta = recipeSimulations.reduce((sum, sim) => {
-        const scenario = sim.scenarios.find((s) => s.variant.id === variant.id);
-        return sum + (scenario ? scenario.delta * sim.totalQtySold : 0);
-      }, 0);
-      return { variant, totalDelta };
-    });
-  }, [variantPrices, recipeSimulations]);
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div>
-        <h2 className="mc-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>
-          Simulateur
-        </h2>
-        <p style={{ margin: '4px 0 0', fontSize: 13, color: palette.inkSoft }}>
-          Et si vous n'utilisiez qu'une seule variante ? Comparez l'impact sur le coût de revient et la marge.
-        </p>
-      </div>
-
-      <div style={{ marginBottom: 4 }}>
-        <InfoBanner icon={Zap} color={palette.amber}>
-          Sélectionnez un article ayant plusieurs variantes pour voir comment le coût des
-          recettes évolue selon la variante utilisée. Les économies projetées sont calculées
-          sur les ventes effectives de la période.
-        </InfoBanner>
-      </div>
-
-      {multiVariantArticles.length === 0 ? (
-        <div className="mc-card" style={{ padding: 40, textAlign: 'center' }}>
-          <Layers size={32} style={{ color: palette.inkSoft, opacity: 0.4, marginBottom: 12 }} />
-          <div style={{ fontSize: 14, color: palette.inkSoft }}>
-            Aucun article n'a plusieurs variantes.<br />
-            Allez dans <strong>Articles</strong> pour ajouter des variantes (ex: Lait de coco
-            La Créole + Chaiko).
-          </div>
-        </div>
-      ) : (
-        <>
-          {/* Article picker */}
-          <div className="mc-card" style={{ padding: 20 }}>
-            <label className="mc-label">Article à simuler</label>
-            <select
-              className="mc-input"
-              value={selectedArticleId || ''}
-              onChange={(e) => setSelectedArticleId(e.target.value)}
-              style={{ maxWidth: 480 }}
-            >
-              {multiVariantArticles.map((ing) => (
-                <option key={ing.id} value={ing.id}>
-                  {ing.name} ({ing.variants.length} variantes)
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {selectedArticle && (
-            <>
-              {/* Variant comparison */}
-              <div className="mc-card" style={{ padding: 20 }}>
-                <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
-                  Variantes de "{selectedArticle.name}"
-                </h3>
-                <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 16px' }}>
-                  Prix moyen actuel (toutes variantes pondérées) :{' '}
-                  <strong className="mc-display" style={{ color: palette.ink }}>
-                    {blendedAverage != null ? formatEuro(blendedAverage) + '/' + selectedArticle.unit : '—'}
-                  </strong>
-                </p>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                  {variantPrices.map((variant) => {
-                    const cheapest = Math.min(
-                      ...variantPrices.filter((v) => v.avg != null).map((v) => v.avg)
-                    );
-                    const isCheapest = variant.avg != null && variant.avg === cheapest;
-
-                    return (
-                      <div
-                        key={variant.id}
-                        style={{
-                          padding: 14,
-                          background: isCheapest ? palette.sage + '10' : palette.paper,
-                          borderRadius: 8,
-                          border: isCheapest ? `2px solid ${palette.sage}` : `1px solid ${palette.rule}`,
-                        }}
-                      >
-                        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-                          {variant.name}
-                        </div>
-                        <div className="mc-display" style={{ fontSize: 22, fontWeight: 700, color: isCheapest ? palette.sage : palette.ink }}>
-                          {variant.avg != null ? formatEuro(variant.avg) : '—'}
-                          <span style={{ fontSize: 12, fontWeight: 400, color: palette.inkSoft }}>
-                            /{selectedArticle.unit}
-                          </span>
-                        </div>
-                        {isCheapest && (
-                          <div style={{ fontSize: 11, color: palette.sage, marginTop: 4, fontWeight: 600 }}>
-                            ✓ Moins chère
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Aggregate impact */}
-              {aggregateImpact.length > 0 && recipeSimulations.length > 0 && (
-                <div className="mc-card" style={{ padding: 20 }}>
-                  <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
-                    Impact global sur la période
-                  </h3>
-                  <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 16px' }}>
-                    Si vous standardisez sur une seule variante, l'économie (ou surcoût) totale
-                    par rapport à votre mix actuel d'achats, calculée sur vos ventes effectives.
-                  </p>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {aggregateImpact
-                      .slice()
-                      .sort((a, b) => a.totalDelta - b.totalDelta)
-                      .map(({ variant, totalDelta }) => {
-                        const isSaving = totalDelta < -0.01;
-                        const isCosting = totalDelta > 0.01;
-                        const color = isSaving ? palette.sage : isCosting ? palette.wine : palette.inkSoft;
-
-                        return (
-                          <div
-                            key={variant.id}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              padding: 12,
-                              background: palette.paper,
-                              borderRadius: 6,
-                            }}
-                          >
-                            <div style={{ fontSize: 13, fontWeight: 500 }}>
-                              Si tout en <strong>{variant.name}</strong>
-                            </div>
-                            <div className="mc-display" style={{ fontSize: 18, fontWeight: 700, color }}>
-                              {isSaving ? '−' : isCosting ? '+' : ''}{formatEuro(Math.abs(totalDelta))}
-                              <span style={{ fontSize: 11, fontWeight: 400, color: palette.inkSoft, marginLeft: 6 }}>
-                                {isSaving ? 'économisé' : isCosting ? 'en plus' : ''}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
-
-              {/* Recipe-by-recipe simulation */}
-              <div className="mc-card" style={{ padding: 20 }}>
-                <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
-                  Détail par recette
-                </h3>
-                <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 16px' }}>
-                  Coût de revient de chaque recette utilisant cet article, simulé pour chaque variante.
-                </p>
-
-                {recipeSimulations.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: 32, fontSize: 13, color: palette.inkSoft }}>
-                    Aucune recette n'utilise cet article.
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    {recipeSimulations.map((sim) => (
-                      <div key={sim.recipe.id} style={{ padding: 14, background: palette.paper, borderRadius: 8 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                          <div>
-                            <div style={{ fontSize: 14, fontWeight: 600 }}>{sim.recipe.name}</div>
-                            <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2 }}>
-                              Vente {formatEuro(sim.recipe.salePrice)} · {sim.totalQtySold} ventes sur la période
-                            </div>
-                          </div>
-                          <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: 11, color: palette.inkSoft }}>Coût actuel (mix)</div>
-                            <div className="mc-display" style={{ fontSize: 16, fontWeight: 700 }}>
-                              {formatEuro(sim.baselineCost)}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
-                          {sim.scenarios.map((scenario) => {
-                            const isSaving = scenario.delta < -0.001;
-                            const isCosting = scenario.delta > 0.001;
-                            const color = isSaving ? palette.sage : isCosting ? palette.wine : palette.inkSoft;
-
-                            return (
-                              <div
-                                key={scenario.variant.id}
-                                style={{
-                                  padding: 10,
-                                  background: 'white',
-                                  borderRadius: 6,
-                                  border: `1px solid ${palette.rule}`,
-                                }}
-                              >
-                                <div style={{ fontSize: 11, color: palette.inkSoft, marginBottom: 4 }}>
-                                  Si {scenario.variant.name}
-                                </div>
-                                <div className="mc-display" style={{ fontSize: 15, fontWeight: 600 }}>
-                                  {formatEuro(scenario.simCost)}{' '}
-                                  <span style={{ fontSize: 11, fontWeight: 500, color }}>
-                                    ({isSaving ? '−' : isCosting ? '+' : ''}{formatEuro(Math.abs(scenario.delta))})
-                                  </span>
-                                </div>
-                                <div style={{ fontSize: 11, color: palette.inkSoft, marginTop: 2 }}>
-                                  FC <span style={{ color }}>{formatPercent(scenario.simRatio)}</span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </>
-      )}
     </div>
   );
 }
