@@ -16939,7 +16939,7 @@ function loadPdfJs() {
 }
 
 function parseClyoSalesPages(pages) {
-  const NUM = /^-?\d{1,3}(?:[   ]\d{3})*(?:,\d+)?$|^-?\d+(?:,\d+)?$/;
+  const NUM = /^-?\d{1,3}(?:[   ]\d{3})*(?:,\d+)?$|^-?\d+(?:[.,]\d+)?$/; // CLYO sort parfois « 143.0011 »
   const toNum = (s) => parseFloat(s.replace(/[   ]/g, '').replace(',', '.'));
   let period = null;
   const rows = [];
@@ -16960,7 +16960,7 @@ function parseClyoSalesPages(pages) {
     }
     const pageRows = byY.filter((g) => g.cells.length >= 8).map((g) => {
       const c = g.cells.sort((a, b) => a.x - b.x).map((it) => toNum(it.str.trim()));
-      return { y: g.y, qty: c[0], revenue: c[3], frags: [] };
+      return { y: g.y, qty: Math.round(c[0] * 100) / 100, revenue: c[3], frags: [] };
     });
     // Fragments de désignation → ligne la plus proche en hauteur
     const names = all.filter((it) => it.x < nameMaxX && !/^(Désignation|Date|Total)$/i.test(it.str.trim()));
