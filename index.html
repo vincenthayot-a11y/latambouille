@@ -3588,6 +3588,26 @@ async function driveListFiles(endpoint, token) {
 }
 
 /**
+ * Met un fichier du dossier Drive à la corbeille (action "delete" de l'Apps Script).
+ */
+async function driveDeleteFile(endpoint, token, filename) {
+  console.log('[Drive] Deleting', filename);
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ token, action: 'delete', file: filename }),
+  });
+  if (!response.ok) {
+    throw new Error('HTTP ' + response.status + ' lors de la suppression de ' + filename);
+  }
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error('Apps Script: ' + (data.error || 'erreur inconnue'));
+  }
+  return true;
+}
+
+/**
  * Reads ALL data files from Drive and reassembles them into the in-memory shape
  * { articles, recipes, purchases, sales }. Returns null if the folder is empty.
  */
@@ -3677,10 +3697,9 @@ async function driveWriteSpecificFiles(endpoint, token, filesToWrite) {
 //
 // Règles :
 //   • 1 snapshot par jour maximum (le nom inclut la date → réécriture du jour)
-//   • rotation à 30 : si 30 snapshots existent déjà et qu'on en crée un
-//     nouveau (date encore absente), on réutilise le nom du PLUS ANCIEN.
-//     Comme l'Apps Script n'expose pas d'action "delete", écraser le plus
-//     vieux fichier revient au même que le supprimer puis recréer.
+//   • rotation à 30 : le snapshot du jour est toujours écrit sous son nom
+//     daté, puis les plus anciens au-delà de 30 sont mis à la corbeille
+//     (action "delete" de l'Apps Script).
 
 const BACKUP_PREFIX = 'backup-';
 const BACKUP_MAX = 30;
@@ -3706,19 +3725,6 @@ function isBackupFilename(name) {
 async function driveWriteDatedBackup(endpoint, token, fullData) {
   const todayName = backupFilenameForDate();
 
-  // Liste des snapshots existants
-  const allFiles = await driveListFiles(endpoint, token);
-  const backups = allFiles.filter((f) => isBackupFilename(f.name)).map((f) => f.name).sort();
-
-  // Si le snapshot du jour existe déjà, on l'écrase (1/jour) — sinon rotation
-  let targetName = todayName;
-  if (!backups.includes(todayName) && backups.length >= BACKUP_MAX) {
-    // On réutilise le nom du plus ancien (premier dans l'ordre alphabétique =
-    // chronologique pour ce format de date). Le contenu daté reste correct car
-    // le snapshot lui-même porte sa propre date d'export à l'intérieur.
-    targetName = backups[0];
-  }
-
   const payload = {
     ...fullData,
     _backupMeta: {
@@ -3728,9 +3734,25 @@ async function driveWriteDatedBackup(endpoint, token, fullData) {
     },
   };
 
-  await driveWriteFile(endpoint, token, targetName, payload);
-  console.log('[Drive] Snapshot écrit :', targetName, '(', backups.length, 'snapshots existants )');
-  return targetName;
+  // 1. Toujours écrire le snapshot du jour sous son vrai nom (écrasé si déjà là).
+  await driveWriteFile(endpoint, token, todayName, payload);
+
+  // 2. Rotation : on met à la corbeille les snapshots les plus anciens au-delà
+  //    de BACKUP_MAX. Best-effort : si l'Apps Script ne connaît pas encore
+  //    l'action "delete", on s'arrête sans casser la sauvegarde du jour.
+  try {
+    const allFiles = await driveListFiles(endpoint, token);
+    const backups = [...new Set(allFiles.filter((f) => isBackupFilename(f.name)).map((f) => f.name).concat(todayName))].sort();
+    const excess = backups.slice(0, Math.max(0, backups.length - BACKUP_MAX));
+    for (const name of excess) {
+      if (name === todayName) continue;
+      await driveDeleteFile(endpoint, token, name);
+    }
+    console.log('[Drive] Snapshot écrit :', todayName, '—', excess.length, 'ancien(s) supprimé(s)');
+  } catch (rotErr) {
+    console.warn('[Drive] Rotation des snapshots impossible (snapshot du jour OK):', rotErr.message);
+  }
+  return todayName;
 }
 
 
