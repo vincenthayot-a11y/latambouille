@@ -7316,10 +7316,26 @@ function DashboardView({ context }) {
         map[ym].revenue += s.revenue;
         map[ym].cost += cost * s.qty;
       });
+    // Achats alimentaires réels du même mois civil
+    for (const p of purchases) {
+      const ym = (p.date || '').slice(0, 7);
+      if (!map[ym]) continue;
+      for (const item of (p.items || [])) {
+        if ((productTypeById[item.articleId] || 'food') !== 'consumable') map[ym].real = (map[ym].real || 0) + (item.total || 0);
+      }
+    }
     return Object.values(map)
       .sort((a, b) => a.ym.localeCompare(b.ym))
-      .map((d) => ({ ...d, label: formatMonthLabel(d.ym), margin: d.revenue - d.cost, ratio: d.revenue > 0 ? d.cost / d.revenue : 0 }));
-  }, [sales, recipeCostMap, dateFrom, dateTo]);
+      .map((d) => {
+        const real = d.real || 0;
+        return {
+          ...d, real, label: formatMonthLabel(d.ym),
+          margin: Math.max(0, d.revenue - real),
+          ratio: d.revenue > 0 ? real / d.revenue : 0,
+          theoRatio: d.revenue > 0 ? d.cost / d.revenue : 0,
+        };
+      });
+  }, [sales, purchases, productTypeById, recipeCostMap, dateFrom, dateTo]);
 
   // Recettes classées du food cost le plus élevé au plus bas (prix de vente renseigné)
   const recipeRatios = useMemo(() => {
@@ -7386,23 +7402,28 @@ function DashboardView({ context }) {
             CA et coût matière par mois
           </h3>
           <div style={{ fontSize: 11, color: palette.inkSoft, marginBottom: 12 }}>
-            Barre = CA HT · bordeaux = coût matière · vert = marge brute
+            Barre = CA HT · bordeaux = achats alimentaires réels · vert = marge · pointillés = coût théorique (recettes)
           </div>
           {monthlyActivity.length === 0 ? (
             <div style={{ fontSize: 13, color: palette.inkSoft, padding: '32px 0', textAlign: 'center' }}>Aucune vente sur la période.</div>
           ) : (
             <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={monthlyActivity}>
+              <ComposedChart data={monthlyActivity}>
                 <CartesianGrid strokeDasharray="3 3" stroke={palette.rule} vertical={false} />
                 <XAxis dataKey="label" stroke={palette.inkSoft} fontSize={11} />
                 <YAxis stroke={palette.inkSoft} fontSize={11} tickFormatter={(v) => (v >= 1000 ? Math.round(v / 1000) + ' k€' : v)} width={48} />
                 <Tooltip
                   contentStyle={{ background: palette.cream, border: `1px solid ${palette.rule}`, borderRadius: 6, fontSize: 12 }}
-                  formatter={(v, name, item) => [formatEuro(v) + (name === 'Coût matière' ? ` (${formatPercent(item.payload.ratio)})` : ''), name]}
+                  formatter={(v, name, item) => [
+                    formatEuro(v) + (name === 'Achats alimentaires' ? ` (${formatPercent(item.payload.ratio)} du CA)` : name === 'Coût théorique' ? ` (${formatPercent(item.payload.theoRatio)})` : ''),
+                    name,
+                  ]}
+                  labelFormatter={(l, items) => (items && items[0] ? `${l} · CA ${formatEuro(items[0].payload.revenue)}` : l)}
                 />
-                <Bar dataKey="cost" stackId="a" fill={palette.wine} name="Coût matière" />
-                <Bar dataKey="margin" stackId="a" fill={palette.sage} name="Marge brute" radius={[3, 3, 0, 0]} />
-              </BarChart>
+                <Bar dataKey="real" stackId="a" fill={palette.wine} name="Achats alimentaires" />
+                <Bar dataKey="margin" stackId="a" fill={palette.sage} name="Marge" radius={[3, 3, 0, 0]} />
+                <Line dataKey="cost" name="Coût théorique" stroke={palette.ink} strokeDasharray="4 3" strokeWidth={1.5} dot={{ r: 2 }} isAnimationActive={false} />
+              </ComposedChart>
             </ResponsiveContainer>
           )}
         </div>
