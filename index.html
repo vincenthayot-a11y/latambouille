@@ -165,6 +165,9 @@ import {
   ComposedChart,
   Line,
   Legend,
+  ScatterChart,
+  Scatter,
+  ReferenceLine,
 } from 'recharts';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -17624,6 +17627,90 @@ function ArticleSearchSelect({ options, value, onChange }) {
   );
 }
 
+// ─── Classement de la carte (menu engineering, Kasavana–Smith) ────────────
+// Par catégorie de recette, sur la période : popularité = part des quantités
+// vendues de la catégorie ; marge unitaire = prix moyen réel HT − coût assiette.
+// Seuils : popularité haute si part ≥ 70 % × (1 / nb recettes vendues) ;
+// marge haute si ≥ marge unitaire moyenne pondérée par les quantités.
+const MENU_CLASSES = {
+  star:   { label: '★ Locomotive', hint: 'Populaire et rentable',  action: 'À garder tel quel',       color: palette.sage },
+  plow:   { label: 'Vache à lait', hint: 'Populaire, peu rentable', action: 'Revoir prix ou portion',  color: palette.amber },
+  puzzle: { label: 'Énigme',       hint: 'Rentable, peu vendu',    action: 'Mettre en avant',         color: '#4A6FA5' },
+  dog:    { label: 'Poids mort',   hint: 'Peu vendu, peu rentable', action: 'Retirer ou retravailler', color: palette.wine },
+};
+
+function menuEngineering(recipes, sales, priceIndex, category, dateFrom, dateTo) {
+  const assortmentBase = findAssortmentBase(recipes);
+  const rows = [];
+  for (const r of recipes) {
+    if (r.isAssortmentBase || (r.category || 'Autre') !== category) continue;
+    let qty = 0, revenue = 0, fromMenu = false;
+    for (const s of sales) {
+      if (s.recipeId !== r.id || !saleInPeriod(s, dateFrom, dateTo)) continue;
+      qty += s.qty || 0; revenue += s.revenue || 0;
+      if (s.menuId) fromMenu = true;
+    }
+    if (!(qty > 0)) continue;
+    const cost = indexedPlateCost(r, priceIndex, assortmentBase).plateCost;
+    const avgPrice = revenue / qty;
+    const unitMargin = avgPrice - cost;
+    rows.push({ id: r.id, name: r.name, qty, revenue, cost, avgPrice, unitMargin, totalMargin: unitMargin * qty, fromMenu });
+  }
+  const totalQty = rows.reduce((s, x) => s + x.qty, 0);
+  const popThreshold = rows.length ? 0.7 / rows.length : 0;
+  const marginThreshold = totalQty > 0 ? rows.reduce((s, x) => s + x.unitMargin * x.qty, 0) / totalQty : 0;
+  for (const x of rows) {
+    x.share = totalQty > 0 ? x.qty / totalQty : 0;
+    const pop = x.share >= popThreshold, rich = x.unitMargin >= marginThreshold;
+    x.cls = pop ? (rich ? 'star' : 'plow') : (rich ? 'puzzle' : 'dog');
+  }
+  rows.sort((a, b) => b.totalMargin - a.totalMargin);
+  return { rows, popThreshold, marginThreshold, totalQty };
+}
+
+// ─── Écarts achats / consommation théorique par article ───────────────────
+// Période = intersection du filtre global et de la couverture réelle des
+// ventes (sinon on comparerait des achats sans ventes en face). Théorique =
+// buildOutflowIndex sur les seules ventes de la période (segments mensuels
+// inclus dès qu'ils chevauchent la période, comme partout dans l'app).
+function purchaseGapAnalysis(articles, recipes, sales, purchases, priceIndex, dateFrom, dateTo) {
+  const inPeriod = sales.filter((s) => saleInPeriod(s, dateFrom, dateTo));
+  if (inPeriod.length === 0) return null;
+  let covFrom = null, covTo = null;
+  for (const s of inPeriod) {
+    if (!covFrom || s.date < covFrom) covFrom = s.date;
+    const end = s.dateTo || s.date;
+    if (!covTo || end > covTo) covTo = end;
+  }
+  const from = dateFrom && dateFrom > covFrom ? dateFrom : covFrom;
+  const to = dateTo && dateTo < covTo ? dateTo : covTo;
+  const idx = buildOutflowIndex(inPeriod, recipes);
+  const bought = {};
+  for (const p of purchases) {
+    if (!p.date || p.date < from || p.date > to) continue;
+    for (const it of (p.items || [])) {
+      if (!it.articleId) continue;
+      const b = bought[it.articleId] || (bought[it.articleId] = { qty: 0, total: 0 });
+      if (it.convertedQty > 0) b.qty += it.convertedQty;
+      b.total += it.total || 0;
+    }
+  }
+  const used = new Set();
+  for (const r of recipes) for (const l of (r.articles || [])) used.add(l.id);
+  const rows = [];
+  for (const a of articles) {
+    if (!used.has(a.id)) continue;
+    const theo = idx[a.id] ? idx[a.id].total : 0;
+    const b = bought[a.id] || { qty: 0, total: 0 };
+    if (!(theo > 0) && !(b.qty > 0)) continue;
+    const avgPrice = b.qty > 0 ? b.total / b.qty : (priceIndex?.master?.[a.id]?.avg || 0);
+    const gapPct = theo > 0 ? b.qty / theo - 1 : null;
+    rows.push({ id: a.id, name: a.name, unit: a.unit || '', bought: b.qty, spent: b.total, theo, avgPrice, gapPct, gapEur: (b.qty - theo) * avgPrice });
+  }
+  rows.sort((a, b) => Math.abs(b.gapEur) - Math.abs(a.gapEur));
+  return { rows, from, to };
+}
+
 function AnalyticsView({ context }) {
   const { articles, recipes, sales, purchases, priceIndex, dateFrom, dateTo } = context;
   const isMobile = useIsMobile(720);
@@ -17710,28 +17797,33 @@ function AnalyticsView({ context }) {
     return Object.entries(map).map(([name, value]) => ({ name, value }));
   }, [purchases, articles, dateFrom, dateTo]);
 
-  const profitabilityMatrix = useMemo(() => {
-    const assortmentBase = findAssortmentBase(recipes);
-    return recipes
-      .filter((r) => !r.isAssortmentBase) // base doesn't sell, exclude from matrix
-      .map((recipe) => {
-        const cost = indexedPlateCost(recipe, priceIndex, assortmentBase).plateCost;
-        const recipeSales = sales.filter(
-          (s) => s.recipeId === recipe.id && saleInPeriod(s, dateFrom, dateTo)
-        );
-        const totalQty = recipeSales.reduce((sum, s) => sum + s.qty, 0);
-        const totalRevenue = recipeSales.reduce((sum, s) => sum + s.revenue, 0);
-        return {
-          ...recipe,
-          cost,
-          totalQty,
-          totalRevenue,
-          totalCost: cost * totalQty,
-          totalMargin: totalRevenue - cost * totalQty,
-          ratio: recipe.salePrice > 0 ? cost / recipe.salePrice : 0,
-        };
-      });
-  }, [recipes, sales, priceIndex, dateFrom, dateTo]);
+  // ─── Classement de la carte (menu engineering) ────────────────────────
+  const soldCategories = useMemo(() => {
+    const sold = new Set();
+    for (const s of sales) if (saleInPeriod(s, dateFrom, dateTo)) sold.add(s.recipeId);
+    const cats = (context.recipeCategories || ['Entrée', 'Plat', 'Dessert', 'Accompagnement', 'Boisson', 'Autre']).slice();
+    const present = new Set(recipes.filter((r) => !r.isAssortmentBase && sold.has(r.id)).map((r) => r.category || 'Autre'));
+    for (const c of present) if (!cats.includes(c)) cats.push(c);
+    return cats.filter((c) => present.has(c));
+  }, [recipes, sales, dateFrom, dateTo, context.recipeCategories]);
+  const [menuCategory, setMenuCategory] = useState('Plat');
+  const menuCat = soldCategories.includes(menuCategory) ? menuCategory : (soldCategories[0] || 'Plat');
+  const menuEng = useMemo(
+    () => menuEngineering(recipes, sales, priceIndex, menuCat, dateFrom, dateTo),
+    [recipes, sales, priceIndex, menuCat, dateFrom, dateTo]
+  );
+
+  // ─── Écarts achats / ventes par produit ───────────────────────────────
+  const GAP_MIN_SPEND = 300;
+  const [showAllGaps, setShowAllGaps] = useState(false);
+  const gapData = useMemo(
+    () => purchaseGapAnalysis(articles, recipes, sales, purchases, priceIndex, dateFrom, dateTo),
+    [articles, recipes, sales, purchases, priceIndex, dateFrom, dateTo]
+  );
+  const gapRows = useMemo(
+    () => (gapData ? gapData.rows.filter((r) => showAllGaps || r.spent >= GAP_MIN_SPEND) : []),
+    [gapData, showAllGaps]
+  );
 
   // ─── Optimiseur fournisseur ───────────────────────────────────────────
   // Pour chaque article acheté chez ≥ 2 fournisseurs sur la période choisie,
@@ -18101,56 +18193,171 @@ function AnalyticsView({ context }) {
         )}
       </div>
 
+      {/* ── Classement de la carte (menu engineering) ───────────────── */}
       <div className="mc-card" style={{ overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${palette.rule}` }}>
-          <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>
-            Matrice de rentabilité
-          </h3>
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${palette.rule}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>Classement de la carte</h3>
+            <div style={{ fontSize: 12, color: palette.inkSoft, maxWidth: 560 }}>
+              Popularité × marge, par catégorie, sur la période. Marge = prix moyen réel HT (ventes CLYO) − coût assiette.
+            </div>
+          </div>
+          {soldCategories.length > 1 && (
+            <SegmentedToggle size="sm" value={menuCat} onChange={setMenuCategory} options={soldCategories.map((c) => ({ id: c, label: c }))} />
+          )}
         </div>
         {sales.length === 0 ? (
-          <div style={{
-            display: 'flex', alignItems: 'flex-start', gap: 12,
-            padding: '14px 16px', background: palette.amber + '10',
-            border: `1px solid ${palette.amber}30`, borderRadius: 8,
-            fontSize: 13, color: palette.inkSoft, lineHeight: 1.5,
-          }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 16px', margin: 16, background: palette.amber + '10', border: `1px solid ${palette.amber}30`, borderRadius: 8, fontSize: 13, color: palette.inkSoft, lineHeight: 1.5 }}>
             <Lock size={16} style={{ color: palette.amber, flexShrink: 0, marginTop: 2 }} />
-            <span>
-              <strong>En attente des ventes.</strong> La rentabilité par recette (ventes, CA, marge totale)
-              s'activera une fois vos ventes CLYO importées. L'optimiseur fournisseur et l'évolution des prix
-              ci-dessus fonctionnent dès maintenant — ils ne dépendent que de vos achats.
-            </span>
+            <span><strong>En attente des ventes.</strong> Le classement de la carte et les écarts achats / ventes s'activeront une fois vos ventes CLYO importées.</span>
           </div>
+        ) : menuEng.rows.length === 0 ? (
+          <div style={{ padding: 32, textAlign: 'center', fontSize: 13, color: palette.inkSoft }}>Aucune vente sur la période pour cette catégorie.</div>
         ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th className="mc-th">Recette</th>
-              <th className="mc-th">Ventes</th>
-              <th className="mc-th">CA</th>
-              <th className="mc-th">Coût total</th>
-              <th className="mc-th">Marge totale</th>
-              <th className="mc-th">FC</th>
-            </tr>
-          </thead>
-          <tbody>
-            {profitabilityMatrix
-              .slice()
-              .sort((a, b) => b.totalMargin - a.totalMargin)
-              .map((recipe) => (
-                <tr key={recipe.id} className="mc-row">
-                  <td className="mc-td" style={{ fontWeight: 500 }}>{recipe.name}</td>
-                  <td className="mc-td">{recipe.totalQty}</td>
-                  <td className="mc-td" style={{ fontFamily: 'Fraunces, serif' }}>{formatEuro(recipe.totalRevenue)}</td>
-                  <td className="mc-td" style={{ fontFamily: 'Fraunces, serif', color: palette.wine }}>{formatEuro(recipe.totalCost)}</td>
-                  <td className="mc-td" style={{ fontFamily: 'Fraunces, serif', fontWeight: 600, color: palette.sage }}>{formatEuro(recipe.totalMargin)}</td>
-                  <td className="mc-td"><StatusPill ratio={recipe.ratio} /></td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
+          <>
+            {/* Légende des 4 classes */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '12px 20px', borderBottom: `1px solid ${palette.rule}` }}>
+              {Object.entries(MENU_CLASSES).map(([k, c]) => {
+                const n = menuEng.rows.filter((r) => r.cls === k).length;
+                return (
+                  <div key={k} style={{ flex: '1 1 150px', padding: '8px 10px', borderRadius: 6, background: c.color + '0E', border: `1px solid ${c.color}30` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: c.color }}>{c.label}</span>
+                      <span style={{ fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 600, color: c.color }}>{n}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: palette.inkSoft }}>{c.hint} → {c.action}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Nuage popularité × marge unitaire (desktop) */}
+            {!isMobile && (
+              <div style={{ padding: '12px 20px 0', height: 240 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={palette.rule} />
+                    <XAxis type="number" dataKey="x" name="Part des ventes" unit=" %" tick={{ fontSize: 11, fill: palette.inkSoft }} domain={[0, 'auto']} />
+                    <YAxis type="number" dataKey="y" name="Marge unitaire" tick={{ fontSize: 11, fill: palette.inkSoft }} tickFormatter={(v) => `${Math.round(v)} €`} width={52} domain={['auto', 'auto']} />
+                    <ReferenceLine x={menuEng.popThreshold * 100} stroke={palette.inkSoft} strokeDasharray="4 4" />
+                    <ReferenceLine y={menuEng.marginThreshold} stroke={palette.inkSoft} strokeDasharray="4 4" />
+                    <Tooltip
+                      cursor={{ strokeDasharray: '3 3' }}
+                      content={({ active, payload }) => {
+                        if (!active || !payload || !payload.length) return null;
+                        const d = payload[0].payload;
+                        return (
+                          <div style={{ background: 'white', border: `1px solid ${palette.rule}`, borderRadius: 6, padding: '6px 10px', fontSize: 12 }}>
+                            <div style={{ fontWeight: 600 }}>{d.name}</div>
+                            <div style={{ color: palette.inkSoft }}>{d.qty} vendus · {d.x.toFixed(1)} % · marge {formatEuro(d.y)}</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Scatter data={menuEng.rows.map((r) => ({ x: r.share * 100, y: r.unitMargin, name: r.name, qty: Math.round(r.qty), cls: r.cls }))}>
+                      {menuEng.rows.map((r) => <Cell key={r.id} fill={MENU_CLASSES[r.cls].color} />)}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th className="mc-th">Recette</th>
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Vendus</th>
+                    {!isMobile && <th className="mc-th" style={{ textAlign: 'right' }}>Part</th>}
+                    {!isMobile && <th className="mc-th" style={{ textAlign: 'right' }}>Prix moyen HT</th>}
+                    {!isMobile && <th className="mc-th" style={{ textAlign: 'right' }}>Coût</th>}
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Marge / unité</th>
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Marge totale</th>
+                    <th className="mc-th">Classe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {menuEng.rows.map((r) => {
+                    const c = MENU_CLASSES[r.cls];
+                    return (
+                      <tr key={r.id} className="mc-row">
+                        <td className="mc-td" style={{ fontWeight: 500 }}>{r.name}</td>
+                        <td className="mc-td" style={{ textAlign: 'right' }}>{Math.round(r.qty)}</td>
+                        {!isMobile && <td className="mc-td" style={{ textAlign: 'right', color: palette.inkSoft }}>{(r.share * 100).toFixed(1).replace('.', ',')} %</td>}
+                        {!isMobile && <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif' }}>{formatEuro(r.avgPrice)}</td>}
+                        {!isMobile && <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', color: palette.wine }}>{formatEuro(r.cost)}</td>}
+                        <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif' }}>{formatEuro(r.unitMargin)}</td>
+                        <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600, color: palette.sage }}>{formatEuro(r.totalMargin)}</td>
+                        <td className="mc-td"><span className="mc-pill" style={{ background: c.color + '20', color: c.color, whiteSpace: 'nowrap' }}>{c.label}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding: '10px 20px', fontSize: 11, color: palette.inkSoft, borderTop: `1px solid ${palette.rule}` }}>
+              Seuils : populaire si part ≥ {(menuEng.popThreshold * 100).toFixed(1).replace('.', ',')} % (70 % de la part moyenne), rentable si marge ≥ {formatEuro(menuEng.marginThreshold)} (moyenne pondérée).
+              {menuEng.rows.some((r) => r.fromMenu) && ' Les ventes en menu comptent 1 plat par menu, entrées/desserts répartis selon les poids du menu, CA au prorata des prix.'}
+            </div>
+          </>
         )}
       </div>
+
+      {/* ── Écarts achats / ventes par produit ──────────────────────── */}
+      {sales.length > 0 && gapData && (
+        <div className="mc-card" style={{ overflow: 'hidden' }}>
+          <div style={{ padding: '16px 20px', borderBottom: `1px solid ${palette.rule}` }}>
+            <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>Écarts achats / ventes par produit</h3>
+            <div style={{ fontSize: 12, color: palette.inkSoft, maxWidth: 640 }}>
+              Quantités achetées comparées à la consommation théorique des fiches, du {formatShortDate(gapData.from, { withYear: true })} au {formatShortDate(gapData.to, { withYear: true })}.
+              Un écart peut venir du stock (inventaire), de pertes, de portions plus généreuses que la fiche, des repas du personnel ou d'une vente non associée (plats du jour ignorés).
+            </div>
+          </div>
+          {gapRows.length === 0 ? (
+            <div style={{ padding: 32, textAlign: 'center', fontSize: 13, color: palette.inkSoft }}>Aucun produit à comparer sur la période.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th className="mc-th">Produit</th>
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Acheté</th>
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Théorique</th>
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Écart</th>
+                    <th className="mc-th" style={{ textAlign: 'right' }}>Écart €</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {gapRows.map((r) => {
+                    const fq = (v) => `${v.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} ${r.unit}`;
+                    const color = r.gapPct == null ? palette.inkSoft : r.gapPct > 0.10 ? palette.wine : r.gapPct < -0.10 ? MENU_CLASSES.puzzle.color : palette.sage;
+                    const title = r.gapPct == null ? 'Aucune vente associée' : r.gapPct > 0.10 ? 'Acheté en trop' : r.gapPct < -0.10 ? 'Recette trop généreuse ou stock' : 'OK';
+                    return (
+                      <tr key={r.id} className="mc-row">
+                        <td className="mc-td" style={{ fontWeight: 500 }}>{r.name}{!isMobile && <span style={{ fontSize: 11, color: palette.inkSoft, fontWeight: 400, marginLeft: 8 }}>{formatEuro(r.spent)}</span>}</td>
+                        <td className="mc-td" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{fq(r.bought)}</td>
+                        <td className="mc-td" style={{ textAlign: 'right', whiteSpace: 'nowrap', color: palette.inkSoft }}>{fq(r.theo)}</td>
+                        <td className="mc-td" style={{ textAlign: 'right' }}>
+                          <span className="mc-pill" title={title} style={{ background: color + '20', color, whiteSpace: 'nowrap' }}>
+                            {r.gapPct == null ? '—' : `${r.gapPct > 0 ? '+' : ''}${(r.gapPct * 100).toFixed(0)} %`}
+                          </span>
+                        </td>
+                        <td className="mc-td" style={{ textAlign: 'right', fontFamily: 'Fraunces, serif', fontWeight: 600, color, whiteSpace: 'nowrap' }}>{r.gapEur > 0 ? '+' : ''}{formatEuro(r.gapEur)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {gapData.rows.length > gapRows.length || showAllGaps ? (
+            <div style={{ padding: '10px 20px', borderTop: `1px solid ${palette.rule}`, fontSize: 12, color: palette.inkSoft, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <span>{showAllGaps ? `${gapData.rows.length} produits` : `${gapData.rows.length - gapRows.length} produits sous ${GAP_MIN_SPEND} € d'achats masqués`}</span>
+              <button type="button" className="mc-btn" onClick={() => setShowAllGaps((v) => !v)} style={{ fontSize: 12, padding: '2px 8px' }}>{showAllGaps ? 'Réduire' : 'Voir tout'}</button>
+            </div>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
