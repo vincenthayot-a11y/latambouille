@@ -16910,12 +16910,328 @@ function ThresholdEditor({ article, onSave, onClose }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//   IMPORT CLYO — PDF "Ventes par articles"
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// CLYO n'exporte que des totaux par article sur une période (pas de détail
+// jour par jour). On lit le PDF, on rattache chaque désignation CLYO à une
+// recette ou un menu (correspondance mémorisée dans recipe.clyoNames /
+// menu.clyoNames), puis on répartit les totaux au prorata des jours sur
+// chaque mois de la période → une vente par recette et par mois.
+// Réimporter une période remplace les ventes CLYO qui la chevauchent.
+
+const PDFJS_VERSION = '3.11.174';
+let _pdfjsPromise = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (_pdfjsPromise) return _pdfjsPromise;
+  _pdfjsPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/build/pdf.min.js`;
+    s.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.js`;
+      resolve(window.pdfjsLib);
+    };
+    s.onerror = () => { _pdfjsPromise = null; reject(new Error('Impossible de charger le lecteur PDF')); };
+    document.head.appendChild(s);
+  });
+  return _pdfjsPromise;
+}
+
+function parseClyoSalesPages(pages) {
+  const NUM = /^-?\d{1,3}(?:[   ]\d{3})*(?:,\d+)?$|^-?\d+(?:,\d+)?$/;
+  const toNum = (s) => parseFloat(s.replace(/[   ]/g, '').replace(',', '.'));
+  let period = null;
+  const rows = [];
+  for (const items of pages) {
+    const all = items.filter((it) => it.str && it.str.trim());
+    const joined = all.map((it) => it.str).join(' ');
+    const pm = joined.match(/Du\s+(\d{2})\/(\d{2})\/(\d{4})\s+Au\s+(\d{2})\/(\d{2})\/(\d{4})/);
+    if (pm && !period) period = { from: `${pm[3]}-${pm[2]}-${pm[1]}`, to: `${pm[6]}-${pm[5]}-${pm[4]}` };
+    const qtyHeader = all.find((it) => /^Quantit/i.test(it.str.trim()));
+    const nameMaxX = qtyHeader ? qtyHeader.x - 5 : 200;
+    // Lignes de données : ≥ 8 nombres alignés sur la même hauteur, à droite de la colonne nom
+    const nums = all.filter((it) => it.x >= nameMaxX && NUM.test(it.str.trim()));
+    const byY = [];
+    for (const it of nums) {
+      let g = byY.find((r) => Math.abs(r.y - it.y) < 3);
+      if (!g) { g = { y: it.y, cells: [] }; byY.push(g); }
+      g.cells.push(it);
+    }
+    const pageRows = byY.filter((g) => g.cells.length >= 8).map((g) => {
+      const c = g.cells.sort((a, b) => a.x - b.x).map((it) => toNum(it.str.trim()));
+      return { y: g.y, qty: c[0], revenue: c[3], frags: [] };
+    });
+    // Fragments de désignation → ligne la plus proche en hauteur
+    const names = all.filter((it) => it.x < nameMaxX && !/^(Désignation|Date|Total)$/i.test(it.str.trim()));
+    for (const it of names) {
+      let best = null, bd = Infinity;
+      for (const r of pageRows) { const d = Math.abs(r.y - it.y); if (d < bd) { bd = d; best = r; } }
+      if (best && bd < 16) best.frags.push(it);
+    }
+    for (const r of pageRows) {
+      const name = r.frags.sort((a, b) => (b.y - a.y) || (a.x - b.x)).map((f) => f.str.trim()).join(' ').replace(/\s+/g, ' ').trim();
+      if (!name || /^total$/i.test(name) || !(r.qty > 0)) continue;
+      rows.push({ name, qty: r.qty, revenue: r.revenue });
+    }
+  }
+  return { period, rows };
+}
+
+async function readClyoSalesPdf(file) {
+  const pdfjs = await loadPdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  const doc = await pdfjs.getDocument({ data }).promise;
+  const pages = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const tc = await (await doc.getPage(p)).getTextContent();
+    pages.push(tc.items.map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5] })));
+  }
+  const report = parseClyoSalesPages(pages);
+  if (!report.period) throw new Error(file.name + ' : période "Du … Au …" introuvable');
+  if (report.rows.length === 0) throw new Error(file.name + ' : aucune ligne de vente lue');
+  return { ...report, fileName: file.name };
+}
+
+function clyoKey(name) {
+  return normalizeText(name).replace(/[.\s]+$/, '');
+}
+
+/** Correspondance par défaut : nom déjà mémorisé, sinon nom identique. */
+function clyoDefaultTarget(name, recipes, menus) {
+  const k = clyoKey(name);
+  const r = recipes.find((x) => !x.isAssortmentBase && (x.clyoNames || []).some((n) => clyoKey(n) === k));
+  if (r) return 'r:' + r.id;
+  const m = menus.find((x) => (x.clyoNames || []).some((n) => clyoKey(n) === k));
+  if (m) return 'm:' + m.id;
+  const r2 = recipes.find((x) => !x.isAssortmentBase && clyoKey(x.name) === k);
+  if (r2) return 'r:' + r2.id;
+  const m2 = menus.find((x) => clyoKey(x.name) === k);
+  if (m2) return 'm:' + m2.id;
+  return '';
+}
+
+/** Découpe [from, to] en segments mensuels avec leur poids en jours. */
+function clyoMonthSegments(from, to) {
+  const segs = [];
+  const start = parseLocalDate(from), end = parseLocalDate(to);
+  const total = Math.round((end - start) / 86400000) + 1;
+  let cur = new Date(start);
+  while (cur <= end) {
+    const monthEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+    const segEnd = monthEnd < end ? monthEnd : end;
+    const days = Math.round((segEnd - cur) / 86400000) + 1;
+    const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    segs.push({ from: iso(cur), to: iso(segEnd), weight: days / total });
+    cur = new Date(segEnd.getFullYear(), segEnd.getMonth(), segEnd.getDate() + 1);
+  }
+  return segs;
+}
+
+/**
+ * Transforme un rapport CLYO + correspondances en ventes.
+ * Menu : le plat compte pour chaque menu vendu ; entrées et desserts sont
+ * répartis à parts égales entre les choix possibles. Le CA du menu est
+ * réparti entre ses composants au prorata de leur prix de vente.
+ */
+function buildClyoSales(report, mapping, recipes, menus) {
+  const recipeById = {};
+  for (const r of recipes) recipeById[r.id] = r;
+  const segs = clyoMonthSegments(report.period.from, report.period.to);
+  const out = [];
+  const round2 = (n) => Math.round(n * 100) / 100;
+  for (const row of report.rows) {
+    const target = mapping[clyoKey(row.name)];
+    if (!target) continue;
+    let parts = [];
+    if (target.startsWith('r:')) {
+      const r = recipeById[target.slice(2)];
+      if (r) parts = [{ recipeId: r.id, share: 1, weight: 1 }];
+    } else {
+      const m = menus.find((x) => x.id === target.slice(2));
+      if (m) {
+        const list = (v) => (Array.isArray(v) ? v : []).filter((id) => recipeById[id]);
+        if (m.platId && recipeById[m.platId]) parts.push({ recipeId: m.platId, share: 1 });
+        for (const group of [list(m.entrees), list(m.desserts)]) {
+          for (const id of group) parts.push({ recipeId: id, share: 1 / group.length });
+        }
+        for (const p of parts) p.weight = p.share * ((recipeById[p.recipeId].salePrice || 0) || 1);
+      }
+    }
+    if (parts.length === 0) continue;
+    const wSum = parts.reduce((s, p) => s + p.weight, 0);
+    for (const seg of segs) {
+      for (const p of parts) {
+        out.push({
+          id: generateId('s'),
+          date: seg.from,
+          dateTo: seg.to,
+          recipeId: p.recipeId,
+          qty: round2(row.qty * p.share * seg.weight),
+          revenue: round2(row.revenue * (p.weight / wSum) * seg.weight),
+          source: 'clyo',
+          clyoName: row.name,
+          ...(target.startsWith('m:') ? { menuId: target.slice(2) } : {}),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function ClyoMappingModal({ reports, recipes, menus, onConfirm, onClose }) {
+  // Lignes fusionnées (plusieurs PDF possibles) par désignation
+  const merged = useMemo(() => {
+    const map = new Map();
+    for (const rep of reports) {
+      for (const row of rep.rows) {
+        const k = clyoKey(row.name);
+        const cur = map.get(k) || { key: k, name: row.name, qty: 0, revenue: 0 };
+        cur.qty += row.qty; cur.revenue += row.revenue;
+        map.set(k, cur);
+      }
+    }
+    return [...map.values()];
+  }, [reports]);
+
+  const [mapping, setMapping] = useState(() => {
+    const m = {};
+    for (const row of merged) m[row.key] = clyoDefaultTarget(row.name, recipes, menus);
+    return m;
+  });
+
+  const sellable = recipes.filter((r) => !r.isAssortmentBase).sort((a, b) => a.name.localeCompare(b.name));
+  const sortedMenus = [...menus].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const linked = merged.filter((r) => mapping[r.key]);
+  const totalCA = merged.reduce((s, r) => s + r.revenue, 0);
+  const linkedCA = linked.reduce((s, r) => s + r.revenue, 0);
+
+  return (
+    <div className="mc-overlay" onClick={onClose}>
+      <div className="mc-modal" style={{ maxWidth: 760, width: '100%', padding: 24, maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+        <h3 className="mc-display" style={{ fontSize: 20, fontWeight: 600, margin: '0 0 4px' }}>
+          Associer les ventes CLYO
+        </h3>
+        <p style={{ fontSize: 12, color: palette.inkSoft, margin: '0 0 14px', lineHeight: 1.5 }}>
+          {reports.map((r) => `${formatShortDate(r.period.from, { withYear: true })} → ${formatShortDate(r.period.to, { withYear: true })}`).join(' · ')}
+          {' — '}les associations sont mémorisées pour les prochains imports. Les lignes laissées sur « Ignorer » (boissons, divers…) ne sont pas importées.
+        </p>
+        <div style={{ overflowY: 'auto', flex: 1, border: `1px solid ${palette.rule}`, borderRadius: 8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th className="mc-th">Désignation CLYO</th>
+                <th className="mc-th" style={{ textAlign: 'right' }}>Qté</th>
+                <th className="mc-th" style={{ textAlign: 'right' }}>CA HT</th>
+                <th className="mc-th">Recette / menu</th>
+              </tr>
+            </thead>
+            <tbody>
+              {merged.map((row) => (
+                <tr key={row.key} className="mc-row" style={{ opacity: mapping[row.key] ? 1 : 0.6 }}>
+                  <td className="mc-td" style={{ fontWeight: 500 }}>{row.name}</td>
+                  <td className="mc-td" style={{ textAlign: 'right' }}>{row.qty}</td>
+                  <td className="mc-td" style={{ textAlign: 'right' }}>{formatEuro(row.revenue)}</td>
+                  <td className="mc-td">
+                    <select
+                      className="mc-input"
+                      style={{ padding: '4px 8px', fontSize: 13 }}
+                      value={mapping[row.key] || ''}
+                      onChange={(e) => setMapping({ ...mapping, [row.key]: e.target.value })}
+                    >
+                      <option value="">— Ignorer —</option>
+                      {sortedMenus.length > 0 && (
+                        <optgroup label="Menus">
+                          {sortedMenus.map((m) => <option key={m.id} value={'m:' + m.id}>{m.name}</option>)}
+                        </optgroup>
+                      )}
+                      <optgroup label="Recettes">
+                        {sellable.map((r) => <option key={r.id} value={'r:' + r.id}>{r.name}</option>)}
+                      </optgroup>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginTop: 16 }}>
+          <div style={{ fontSize: 12, color: palette.inkSoft }}>
+            {linked.length}/{merged.length} lignes associées · {formatEuro(linkedCA)} sur {formatEuro(totalCA)} HT
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="mc-btn mc-btn-ghost" onClick={onClose}>Annuler</button>
+            <button className="mc-btn mc-btn-primary" onClick={() => onConfirm(mapping, merged)} disabled={linked.length === 0}>
+              <Upload size={14} /> Importer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 //   SALES VIEW
 // ═══════════════════════════════════════════════════════════════════════════
 
 function SalesView({ context }) {
-  const { sales, setSales, recipes } = context;
+  const { sales, setSales, recipes, setRecipes, menus, setMenus } = context;
   const csvInputRef = useRef(null);
+  const [clyoReports, setClyoReports] = useState(null);
+  const [clyoLoading, setClyoLoading] = useState(false);
+
+  const handleFiles = async (fileList) => {
+    const files = [...(fileList || [])];
+    const pdfs = files.filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+    files.filter((f) => !pdfs.includes(f)).forEach((f) => handleImport(f));
+    if (pdfs.length === 0) return;
+    setClyoLoading(true);
+    try {
+      const reports = [];
+      for (const f of pdfs) reports.push(await readClyoSalesPdf(f));
+      setClyoReports(reports);
+    } catch (err) {
+      mcToast.error(err.message || String(err));
+    } finally {
+      setClyoLoading(false);
+    }
+  };
+
+  const confirmClyo = (mapping, merged) => {
+    // 1. Mémoriser les associations sur les recettes / menus
+    const namesByTarget = {};
+    for (const row of merged) {
+      const t = mapping[row.key];
+      if (t) (namesByTarget[t] = namesByTarget[t] || []).push(row.name);
+    }
+    const allKeys = new Set(merged.map((r) => r.key));
+    const updateNames = (item, prefix) => {
+      const kept = (item.clyoNames || []).filter((n) => !allKeys.has(clyoKey(n)));
+      const added = namesByTarget[prefix + item.id] || [];
+      const next = [...kept, ...added];
+      const prev = item.clyoNames || [];
+      if (next.length === prev.length && next.every((n, i) => n === prev[i])) return item;
+      return { ...item, clyoNames: next };
+    };
+    const nextRecipes = recipes.map((r) => updateNames(r, 'r:'));
+    const nextMenus = (menus || []).map((m) => updateNames(m, 'm:'));
+    if (nextRecipes.some((r, i) => r !== recipes[i])) setRecipes(nextRecipes);
+    if (setMenus && nextMenus.some((m, i) => m !== menus[i])) setMenus(nextMenus);
+
+    // 2. Remplacer les ventes CLYO qui chevauchent les périodes importées
+    let kept = sales;
+    let added = [];
+    for (const rep of clyoReports) {
+      kept = kept.filter((s) => !(s.source === 'clyo' && s.date <= rep.period.to && (s.dateTo || s.date) >= rep.period.from));
+      added = added.concat(buildClyoSales(rep, mapping, nextRecipes, nextMenus));
+    }
+    const replaced = sales.length - kept.length;
+    setSales([...kept, ...added]);
+    setClyoReports(null);
+    const lines = merged.filter((r) => mapping[r.key]).length;
+    mcToast.success(`${lines} lignes CLYO importées` + (replaced > 0 ? ` (${replaced} anciennes ventes remplacées)` : ''), { duration: 6000 });
+  };
 
   const handleImport = (file) => {
     const reader = new FileReader();
@@ -17002,10 +17318,11 @@ function SalesView({ context }) {
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".pdf,application/pdf,.csv,text/csv"
+            multiple
             style={{ display: 'none' }}
             ref={csvInputRef}
-            onChange={(e) => e.target.files[0] && handleImport(e.target.files[0])}
+            onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }}
           />
           <button
             className="mc-btn mc-btn-ghost"
@@ -17016,11 +17333,24 @@ function SalesView({ context }) {
           <button
             className="mc-btn mc-btn-primary"
             onClick={() => csvInputRef.current && csvInputRef.current.click()}
+            disabled={clyoLoading}
           >
-            <Upload size={14} /> Import CLYO
+            <Upload size={14} /> {clyoLoading ? 'Lecture du PDF…' : 'Import CLYO'}
           </button>
         </div>
       </div>
+      <p style={{ fontSize: 12, color: palette.inkSoft, margin: '-12px 0 16px' }}>
+        Export CLYO « Ventes par articles » en PDF — un fichier par mois donne des tendances mensuelles. Plusieurs fichiers possibles en une fois.
+      </p>
+      {clyoReports && (
+        <ClyoMappingModal
+          reports={clyoReports}
+          recipes={recipes}
+          menus={menus || []}
+          onConfirm={confirmClyo}
+          onClose={() => setClyoReports(null)}
+        />
+      )}
 
       <div className="mc-card" style={{ overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -17038,7 +17368,7 @@ function SalesView({ context }) {
               <tr key={sale.id} className="mc-row">
                 <td className="mc-td">{formatShortDate(sale.date, { withYear: true })}</td>
                 <td className="mc-td" style={{ fontWeight: 500 }}>{sale.recipeName}</td>
-                <td className="mc-td">{sale.qty}</td>
+                <td className="mc-td">{Math.round(sale.qty * 10) / 10}</td>
                 <td className="mc-td" style={{ fontFamily: 'Fraunces, serif' }}>{formatEuro(sale.revenue)}</td>
                 <td className="mc-td" style={{ textAlign: 'right' }}>
                   <button className="mc-btn mc-btn-danger" style={{ padding: '4px 10px' }} onClick={() => setSales(sales.filter((s) => s.id !== sale.id))}>
