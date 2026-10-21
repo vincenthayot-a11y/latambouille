@@ -7218,8 +7218,12 @@ function DashboardView({ context }) {
       const end = s.dateTo || s.date;
       if (!salesTo || end > salesTo) salesTo = end;
     }
+    // Achats bornés à la période réellement couverte par les ventes : sinon
+    // « 1A » compare 12 mois d'achats à 9 mois de ventes et fausse le ratio.
+    const pFrom = salesFrom && (!dateFrom || salesFrom > dateFrom) ? salesFrom : dateFrom;
+    const pTo = salesTo && (!dateTo || salesTo < dateTo) ? salesTo : dateTo;
     const filteredPurchases = purchases.filter(
-      (p) => (!dateFrom || p.date >= dateFrom) && (!dateTo || p.date <= dateTo)
+      (p) => (!pFrom || p.date >= pFrom) && (!pTo || p.date <= pTo)
     );
     // Split each line's total based on its product type. Lines without an
     // articleId (legacy / orphan) fall back to food so they're not lost.
@@ -7281,6 +7285,7 @@ function DashboardView({ context }) {
       totalRevenue,
       totalFoodCost,
       foodCostRatio: totalRevenue > 0 ? totalFoodCost / totalRevenue : 0,
+      realFoodCostRatio: totalRevenue > 0 ? purchasesFood / totalRevenue : 0,
       grossMargin: totalRevenue - totalFoodCost,
       salesFrom,
       salesTo,
@@ -7326,7 +7331,10 @@ function DashboardView({ context }) {
   const highCount = recipeRatios.filter((x) => x.ratio > 0.35).length;
 
   // Cible du restaurant : 24–27 % (standard métier ~30 %)
-  const fc = stats.foodCostRatio;
+  // Food cost réel = achats alimentaires ÷ CA (hors variation de stock) ;
+  // le théorique (fiches recettes) sert de comparaison.
+  const fc = stats.realFoodCostRatio;
+  const fcTheo = stats.foodCostRatio;
   const foodCostColor = stats.totalRevenue <= 0 ? palette.inkSoft : fc <= 0.27 ? palette.sage : fc <= 0.30 ? palette.amber : palette.wine;
   const foodCostVerdict = stats.totalRevenue <= 0 ? 'Aucune vente sur la période'
     : fc <= 0.27 ? 'Dans la cible (24–27 %)'
@@ -7344,7 +7352,7 @@ function DashboardView({ context }) {
         variant="hero"
         label="Food cost réel"
         value={stats.totalRevenue > 0 ? formatPercent(fc) : '—'}
-        sub={coveredLabel ? `${foodCostVerdict} · ${coveredLabel}` : foodCostVerdict}
+        sub={[foodCostVerdict, stats.totalRevenue > 0 ? `Théorique (fiches recettes) : ${formatPercent(fcTheo)}` : null, coveredLabel].filter(Boolean).join(' · ')}
         accentColor={foodCostColor}
       />
 
@@ -7355,9 +7363,9 @@ function DashboardView({ context }) {
         gap: isMobile ? 10 : 16,
       }}>
         <KpiCard label="Chiffre d'affaires HT" value={formatEuro(stats.totalRevenue)} sub={`${Math.round(stats.dishesSold)} plats vendus`} accentColor={palette.ink} />
-        <KpiCard label="Coût matière" value={formatEuro(stats.totalFoodCost)} sub="Théorique : recettes × quantités vendues" />
-        <KpiCard label="Marge brute" value={formatEuro(stats.grossMargin)} sub={stats.totalRevenue > 0 ? `${formatPercent(1 - fc)} du CA` : '—'} accentColor={palette.sage} />
-        <KpiCard label="Achats alimentaires" value={formatEuro(stats.purchasesFood)} sub={`Réel · ${stats.purchasesCount} facture${stats.purchasesCount > 1 ? 's' : ''} sur la période`} />
+        <KpiCard label="Achats alimentaires" value={formatEuro(stats.purchasesFood)} sub={`Réel · ${stats.purchasesCount} facture${stats.purchasesCount > 1 ? 's' : ''} sur la période des ventes`} />
+        <KpiCard label="Marge brute" value={formatEuro(stats.totalRevenue - stats.purchasesFood)} sub={stats.totalRevenue > 0 ? `${formatPercent(1 - fc)} du CA · CA − achats alimentaires` : '—'} accentColor={palette.sage} />
+        <KpiCard label="Coût matière théorique" value={formatEuro(stats.totalFoodCost)} sub={`Fiches recettes × ventes · écart ${formatEuro(stats.purchasesFood - stats.totalFoodCost)}`} />
       </div>
 
       {/* ─── 3. Autres coûts (hors food cost) ────────────────────────────── */}
@@ -7372,7 +7380,7 @@ function DashboardView({ context }) {
       </div>
 
       {/* ─── 4. Évolution mensuelle + recettes à surveiller ──────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: 16, alignItems: 'start' }}>
         <div className="mc-card" style={{ padding: 20 }}>
           <h3 className="mc-display" style={{ fontSize: 18, fontWeight: 600, margin: '0 0 4px' }}>
             CA et coût matière par mois
