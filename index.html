@@ -17052,8 +17052,12 @@ function buildClyoSales(report, mapping, recipes, menus) {
       if (m) {
         const list = (v) => (Array.isArray(v) ? v : []).filter((id) => recipeById[id]);
         if (m.platId && recipeById[m.platId]) parts.push({ recipeId: m.platId, share: 1 });
+        // menu.choiceWeights = { recipeId: poids } (optionnel) — ex. 75 % accras / 25 % tahitienne.
+        // Sans poids : choix répartis à parts égales.
+        const cw = m.choiceWeights || {};
         for (const group of [list(m.entrees), list(m.desserts)]) {
-          for (const id of group) parts.push({ recipeId: id, share: 1 / group.length });
+          const wTot = group.reduce((s, id) => s + (cw[id] != null ? cw[id] : 1), 0) || 1;
+          for (const id of group) parts.push({ recipeId: id, share: (cw[id] != null ? cw[id] : 1) / wTot });
         }
         for (const p of parts) p.weight = p.share * ((recipeById[p.recipeId].salePrice || 0) || 1);
       }
